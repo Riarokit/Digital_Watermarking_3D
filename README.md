@@ -7,7 +7,9 @@
 ## 🔧 使用技術
 
 - Python 3.10
-- NumPy, Open3D, Matplotlib, etc.
+- NumPy, Open3D, pandas, sklearn etc.
+- 必要なライブラリはrequirements.txtに記載されています。pip install -r requirements.txt　でインストールできます。
+
 
 ---
 
