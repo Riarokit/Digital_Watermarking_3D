@@ -47,7 +47,11 @@ labels = STG50F.kmeans_cluster_points(xyz, num_clusters=8, seed=42)
 # 5. 埋め込み（channel=0: x, 1: y, 2: z）
 channel = 0
 beta = 1e-3
-xyz_after = STG50F.embed_watermark_xyz(xyz, labels, embed_bits, channel=channel, beta=beta)
+min_weight = 0.2
+max_weight = 1.8
+xyz_after = STG50F.embed_watermark_xyz(xyz, labels, embed_bits, channel=channel, beta=beta,
+                                       flatness_weighting=1, k_neighbors=20, 
+                                       min_weight=min_weight, max_weight=max_weight)
 
 # OP. 攻撃
 xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.01, mode='uniform', seed=42)
@@ -61,7 +65,6 @@ pcd_after.colors = o3d.utility.Vector3dVector(colors)
 psnr = STG50F.calc_psnr_xyz(pcd_before, pcd_after)
 
 ############################################################################################################
-
 
 # 8. 確認用
 o3d.visualization.draw_geometries([pcd_after])
