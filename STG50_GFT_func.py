@@ -5,6 +5,8 @@ import string
 from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
+from concurrent.futures import ProcessPoolExecutor
+import cupy as cp
 
 def generate_random_string(length):
     """
@@ -80,46 +82,15 @@ def add_colors(pcd_before, color="grad"):
     pcd_before.colors = o3d.utility.Vector3dVector(colors)
     return pcd_before
 
-def sort_and_shuffle_points(xyz, seed=42):
-    norms = np.linalg.norm(xyz, axis=1)
-    sort_idx = np.argsort(-norms)  # 降順
-    xyz_sorted = xyz[sort_idx]
-    rng = np.random.RandomState(seed)
-    shuffle_idx = np.arange(xyz_sorted.shape[0])
-    rng.shuffle(shuffle_idx)
-    xyz_shuffled = xyz_sorted[shuffle_idx]
-    return xyz_shuffled, sort_idx, shuffle_idx
-
-
 def kmeans_cluster_points(xyz, num_clusters=8, seed=42):
     kmeans = KMeans(n_clusters=num_clusters, random_state=seed)
-    return kmeans.fit_predict(xyz)
-
-def greedy_cluster_points(xyz, num_clusters=8, seed=42):
-    rng = np.random.RandomState(seed)
-    N = xyz.shape[0]
-    idx_all = np.arange(N)
-    cluster_labels = np.full(N, -1)
-    cluster_sizes = [N // num_clusters] * num_clusters
-    for i in range(N % num_clusters):
-        cluster_sizes[i] += 1
-    unassigned = set(idx_all)
-    clusters = {i: [] for i in range(num_clusters)}
-    seeds = rng.choice(list(unassigned), size=num_clusters, replace=False)
-    for c, s in enumerate(seeds):
-        clusters[c].append(s)
-        cluster_labels[s] = c
-        unassigned.remove(s)
-    for c in range(num_clusters):
-        while len(clusters[c]) < cluster_sizes[c]:
-            last = clusters[c][-1]
-            available = np.array(list(unassigned))
-            dists = np.linalg.norm(xyz[available] - xyz[last], axis=1)
-            next_idx = available[np.argmin(dists)]
-            clusters[c].append(next_idx)
-            cluster_labels[next_idx] = c
-            unassigned.remove(next_idx)
-    return cluster_labels
+    labels = kmeans.fit_predict(xyz)
+    # 各クラスタごとの点数を集計
+    unique, counts = np.unique(labels, return_counts=True)
+    min_count = np.min(counts)
+    min_label = unique[np.argmin(counts)]
+    print(f"最も点数が少ないクラスタ: {min_label}（点数: {min_count}）")
+    return labels
 
 def visualize_clusters(xyz, labels):
     """
@@ -208,17 +179,28 @@ def compute_cluster_weights(flatness_dict, min_weight=0.2, max_weight=1.8, flatn
 
 
 def build_graph(xyz, k=6):
-    adj = kneighbors_graph(xyz, k, mode='distance', include_self=False)
-    W = adj.toarray()
-    dists = W[W > 0]
-    sigma = np.mean(dists) if len(dists) > 0 else 1.0
-    W[W > 0] = np.exp(-W[W > 0]**2 / (sigma**2))
+    adj = kneighbors_graph(xyz, k, mode='distance', include_self=False) # k最近傍グラフ構築
+    W = adj.toarray() # 距離行列に変換
+    dists = W[W > 0] # 全エッジ距離抽出
+    sigma = np.mean(dists) if len(dists) > 0 else 1.0 # 距離平均を計算
+    W[W > 0] = np.exp(-W[W > 0]**2 / (sigma**2)) # 距離重み計算、重み付き隣接行列に変換
     return W
 
 def gft_basis(W):
     D = np.diag(W.sum(axis=1))
     L = D - W
     eigvals, eigvecs = np.linalg.eigh(L)
+    return eigvecs, eigvals
+
+def gft_basis_gpu(W):
+    # 入力Wはnumpy配列（CPU）、ここでGPUに転送
+    W_gpu = cp.asarray(W)
+    D_gpu = cp.diag(W_gpu.sum(axis=1))
+    L_gpu = D_gpu - W_gpu
+    eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
+    # 必要ならCPU（numpy配列）に戻す
+    eigvals = cp.asnumpy(eigvals_gpu)
+    eigvecs = cp.asnumpy(eigvecs_gpu)
     return eigvecs, eigvals
 
 def gft(signal, basis):
@@ -242,82 +224,150 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
     return rep
 
 def embed_watermark_xyz(
-    xyz, labels, embed_bits, channel=0, beta=0.01,
-    flatness_weighting=0, k_neighbors=20, min_weight=0.2, max_weight=1.8
+    xyz, labels, embed_bits, beta=0.01,
+    split_mode=0, flatness_weighting=0, k_neighbors=20, 
+    min_weight=0.2, max_weight=1.8, embed_percent=1.0
 ):
     """
-    各クラスタで全embed_bitsを冗長blockwiseでGFT係数に埋め込む（x/y/z指定可）
-    flatness_weighting: 1なら平坦度, 2なら曲率度を重みにする。0なら重みを付けない。
+    各クラスタでembed_bitsを
+      - split_mode=0: 3チャネル全てに同じ情報（冗長化）
+      - split_mode=1: 3分割してx/y/zにそれぞれ独立情報
+    としてGFT低周波embed_percent分だけ埋め込む
     """
     xyz_after = xyz.copy()
-    embed_bits_length = len(embed_bits)
     cluster_ids = np.unique(labels)
     color_list = visualize_clusters(xyz, labels)
-    # クラスタごと平坦度（または曲率量）を算出
     flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
     weights = compute_cluster_weights(flatness_dict, min_weight, max_weight, flatness_weighting)
     phi = max(
-            np.min(xyz[:,0]) + np.max(xyz[:,0]),
-            np.min(xyz[:,1]) + np.max(xyz[:,1]),
-            np.min(xyz[:,2]) + np.max(xyz[:,2])
-        )
-    
-    print("\n------------ クラスタごとの重みリスト ------------")
-    for c in np.unique(labels):
+        np.min(xyz[:, 0]) + np.max(xyz[:, 0]),
+        np.min(xyz[:, 1]) + np.max(xyz[:, 1]),
+        np.min(xyz[:, 2]) + np.max(xyz[:, 2])
+    )
+
+    # --- ビット列の用意 ---
+    if split_mode == 0:
+        # 全チャネル同じ情報
+        embed_bits_per_channel = [embed_bits] * 3
+    elif split_mode == 1:
+        # 3チャネルで異なる情報（3分割）
+        embed_bits_per_channel = np.array_split(embed_bits, 3)
+    else:
+        raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
+
+    for c in cluster_ids:
         idx = np.where(labels == c)[0]
         pts = xyz[idx]
-        signal = pts[:, channel]
-        W = build_graph(pts, k=6)
-        basis, eigvals = gft_basis(W)
-        gft_coeffs = gft(signal, basis)
-        Q_ = len(gft_coeffs)
-        n_repeat = Q_ // embed_bits_length if embed_bits_length > 0 else 1
-        redundant_bits = repeat_bits_blockwise(embed_bits, n_repeat, Q_)
-        print(f"クラスタ{c}: 色={color_list[c]}  平坦度={flatness_dict[c]:.3e}  平坦重み={weights[c]:.3f}  重み={weights[c]*phi*beta:.3e}")
-        for i in range(Q_):
-            w = redundant_bits[i] * 2 - 1
-            gft_coeffs[i] += beta * weights[c] * w * phi
-        embed_signal = igft(gft_coeffs, basis)
-        xyz_after[idx, channel] = embed_signal
+        for channel in range(3):  # 0:x, 1:y, 2:z
+            bits = embed_bits_per_channel[channel]
+            bits_len = len(bits)
+            if bits_len == 0:
+                continue  # このチャネルには何も埋め込まない
+            signal = pts[:, channel]
+            W = build_graph(pts, k=6)
+            basis, eigvals = gft_basis_gpu(W)
+            gft_coeffs = gft(signal, basis)
+            Q_ = len(gft_coeffs)
+            Q_embed = int(Q_ * embed_percent)
+            n_repeat = Q_embed // bits_len if bits_len > 0 else 1
+            redundant_bits = repeat_bits_blockwise(bits, n_repeat, Q_embed)
+            for i in range(Q_embed):
+                w = redundant_bits[i] * 2 - 1
+                gft_coeffs[i] += w * beta * weights[c] * phi
+            embed_signal = igft(gft_coeffs, basis)
+            xyz_after[idx, channel] = embed_signal
     return xyz_after
 
 
-def extract_watermark_xyz(xyz_emb, xyz_orig, labels, embed_bits_length, channel=0):
+def extract_watermark_xyz(
+    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_percent=1.0
+):
     """
-    冗長化埋め込みに対応した抽出
+    - split_mode=0: 3チャネル合体（冗長化多数決）
+    - split_mode=1: 3分割でそれぞれ独立に抽出（出力は3チャネルぶんのリスト）
     """
-    bit_lists = [[] for _ in range(embed_bits_length)]
-    for c in np.unique(labels):
-        idx = np.where(labels == c)[0]
-        pts_emb = xyz_emb[idx]
-        pts_orig = xyz_orig[idx]
-        W = build_graph(pts_orig, k=6)
-        basis, eigvals = gft_basis(W)
-        gft_coeffs_emb = gft(pts_emb[:, channel], basis)
-        gft_coeffs_orig = gft(pts_orig[:, channel], basis)
-        Q_ = len(gft_coeffs_emb)
-        n_repeat = Q_ // embed_bits_length if embed_bits_length > 0 else 1
-        # blockwise分割でグループ化
-        for bit_idx in range(embed_bits_length):
-            for rep in range(n_repeat):
-                i = bit_idx * n_repeat + rep
-                if i < Q_:
+    if split_mode == 0:
+        # 従来どおり：全チャネル合体でembed_bits_lengthだけ復元
+        bit_lists = [[] for _ in range(embed_bits_length)]
+        for c in np.unique(labels):
+            idx = np.where(labels == c)[0]
+            pts_emb = xyz_emb[idx]
+            pts_orig = xyz_orig[idx]
+            W = build_graph(pts_orig, k=6)
+            basis, eigvals = gft_basis_gpu(W)
+            Q_ = len(basis)
+            Q_extract = int(Q_ * embed_percent)
+            n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
+            for channel in range(3):
+                gft_coeffs_emb = gft(pts_emb[:, channel], basis)
+                gft_coeffs_orig = gft(pts_orig[:, channel], basis)
+                for bit_idx in range(embed_bits_length):
+                    for rep in range(n_repeat):
+                        i = bit_idx * n_repeat + rep
+                        if i < Q_extract:
+                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            bit = 1 if diff > 0 else 0
+                            bit_lists[bit_idx].append(bit)
+                for i in range(n_repeat * embed_bits_length, Q_extract):
+                    bit_idx = i % embed_bits_length
                     diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
                     bit = 1 if diff > 0 else 0
                     bit_lists[bit_idx].append(bit)
-        # 余り係数（Q_ % embed_bits_length）も対応
-        for i in range(n_repeat * embed_bits_length, Q_):
-            bit_idx = i % embed_bits_length
-            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-            bit = 1 if diff > 0 else 0
-            bit_lists[bit_idx].append(bit)
-    # 多数決で復元
-    extracted_bits = []
-    for bits in bit_lists:
-        counts = {0: bits.count(0), 1: bits.count(1)}
-        extracted_bit = 1 if counts[1] > counts[0] else 0
-        extracted_bits.append(extracted_bit)
-    return extracted_bits
+        # 最頻値で最終ビット決定
+        extracted_bits = []
+        for bits in bit_lists:
+            counts = {0: bits.count(0), 1: bits.count(1)}
+            extracted_bit = 1 if counts[1] > counts[0] else 0
+            extracted_bits.append(extracted_bit)
+        return extracted_bits
+
+    elif split_mode == 1:
+        # 3チャネル独立抽出（3分割で埋め込んだ場合に対応）
+        # np.array_splitで埋め込み時と同じように分割サイズを計算
+        split_sizes = [len(arr) for arr in np.array_split(np.zeros(embed_bits_length), 3)]
+        channel_bits_lists = [[] for _ in range(3)]
+        for channel in range(3):
+            bits_len = split_sizes[channel]
+            if bits_len == 0:
+                continue
+            bit_lists = [[] for _ in range(bits_len)]
+            for c in np.unique(labels):
+                idx = np.where(labels == c)[0]
+                pts_emb = xyz_emb[idx]
+                pts_orig = xyz_orig[idx]
+                W = build_graph(pts_orig, k=6)
+                basis, eigvals = gft_basis_gpu(W)
+                Q_ = len(basis)
+                Q_extract = int(Q_ * embed_percent)
+                n_repeat = Q_extract // bits_len if bits_len > 0 else 1
+                gft_coeffs_emb = gft(pts_emb[:, channel], basis)
+                gft_coeffs_orig = gft(pts_orig[:, channel], basis)
+                for bit_idx in range(bits_len):
+                    for rep in range(n_repeat):
+                        i = bit_idx * n_repeat + rep
+                        if i < Q_extract:
+                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            bit = 1 if diff > 0 else 0
+                            bit_lists[bit_idx].append(bit)
+                for i in range(n_repeat * bits_len, Q_extract):
+                    bit_idx = i % bits_len
+                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                    bit = 1 if diff > 0 else 0
+                    bit_lists[bit_idx].append(bit)
+            # channelごと最頻値で決定
+            extracted_bits_channel = []
+            for bits in bit_lists:
+                counts = {0: bits.count(0), 1: bits.count(1)}
+                extracted_bit = 1 if counts[1] > counts[0] else 0
+                extracted_bits_channel.append(extracted_bit)
+            channel_bits_lists.append(extracted_bits_channel)
+        # 3チャネル分のビット列を1次元でまとめて返す
+        extracted_bits = np.concatenate(channel_bits_lists).astype(int).tolist()
+        return extracted_bits
+
+    else:
+        raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
+
 
 def calc_psnr_xyz(pcd_before, pcd_after, reverse=False):
     """
@@ -384,7 +434,43 @@ def add_noise(xyz, noise_percent=0.01, mode='uniform', seed=None, verbose=True):
     return xyz_noisy
 
 
-##################################### 未使用 ##########################################
+##################################### 参考用 ##########################################
+
+def sort_and_shuffle_points(xyz, seed=42):
+    norms = np.linalg.norm(xyz, axis=1)
+    sort_idx = np.argsort(-norms)  # 降順
+    xyz_sorted = xyz[sort_idx]
+    rng = np.random.RandomState(seed)
+    shuffle_idx = np.arange(xyz_sorted.shape[0])
+    rng.shuffle(shuffle_idx)
+    xyz_shuffled = xyz_sorted[shuffle_idx]
+    return xyz_shuffled, sort_idx, shuffle_idx
+
+def greedy_cluster_points(xyz, num_clusters=8, seed=42):
+    rng = np.random.RandomState(seed)
+    N = xyz.shape[0]
+    idx_all = np.arange(N)
+    cluster_labels = np.full(N, -1)
+    cluster_sizes = [N // num_clusters] * num_clusters
+    for i in range(N % num_clusters):
+        cluster_sizes[i] += 1
+    unassigned = set(idx_all)
+    clusters = {i: [] for i in range(num_clusters)}
+    seeds = rng.choice(list(unassigned), size=num_clusters, replace=False)
+    for c, s in enumerate(seeds):
+        clusters[c].append(s)
+        cluster_labels[s] = c
+        unassigned.remove(s)
+    for c in range(num_clusters):
+        while len(clusters[c]) < cluster_sizes[c]:
+            last = clusters[c][-1]
+            available = np.array(list(unassigned))
+            dists = np.linalg.norm(xyz[available] - xyz[last], axis=1)
+            next_idx = available[np.argmin(dists)]
+            clusters[c].append(next_idx)
+            cluster_labels[next_idx] = c
+            unassigned.remove(next_idx)
+    return cluster_labels
 
 def embed_watermark_rgb(colors, xyz, labels, embed_bits, channel=0, beta=0.01):
     """
@@ -435,47 +521,105 @@ def extract_watermark_rgb(colors_emb, colors_orig, xyz, labels, embed_bits_lengt
         extracted_bits.append(extracted_bit)
     return extracted_bits
 
-def embed_watermark_xyz_single(xyz, labels, embed_bits, channel=0, beta=0.001):
+def embed_cluster_channel(args):
+    c, xyz, labels, embed_bits, beta, weights, phi, k_neighbors, flatness_dict = args
+    idx = np.where(labels == c)[0]
+    pts = xyz[idx]
+    cluster_xyz_after = np.copy(pts)
+    for channel in range(3):  # x=0, y=1, z=2
+        signal = pts[:, channel]
+        W = build_graph(pts, k=6)
+        basis, eigvals = gft_basis_gpu(W)
+        gft_coeffs = gft(signal, basis)
+        Q_ = len(gft_coeffs)
+        n_repeat = Q_ // len(embed_bits) if len(embed_bits) > 0 else 1
+        redundant_bits = repeat_bits_blockwise(embed_bits, n_repeat, Q_)
+        for i in range(Q_):
+            w = redundant_bits[i] * 2 - 1
+            gft_coeffs[i] += w * beta * weights[c] * phi
+        embed_signal = igft(gft_coeffs, basis)
+        cluster_xyz_after[:, channel] = embed_signal
+    return c, cluster_xyz_after
+
+def embed_watermark_xyz_parallel(
+    xyz, labels, embed_bits, beta=0.01,
+    flatness_weighting=0, k_neighbors=20, min_weight=0.2, max_weight=1.8
+):
     """
-    各クラスタで全embed_bitsをGFT低次成分に埋め込む（x/y/zを選択可能）
-    channel: 0=x, 1=y, 2=z
+    並列処理により高速化させたバージョン。
     """
     xyz_after = xyz.copy()
     embed_bits_length = len(embed_bits)
-    for c in np.unique(labels):
+    cluster_ids = np.unique(labels)
+    color_list = visualize_clusters(xyz, labels)
+    # クラスタごと平坦度計算＆重み
+    flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
+    weights = compute_cluster_weights(flatness_dict, min_weight, max_weight, flatness_weighting)
+    phi = max(
+        np.min(xyz[:,0]) + np.max(xyz[:,0]),
+        np.min(xyz[:,1]) + np.max(xyz[:,1]),
+        np.min(xyz[:,2]) + np.max(xyz[:,2])
+    )
+    print("\n------------ クラスタごとの重みリスト ------------")
+    for c in cluster_ids:
+        print(f"クラスタ{c}: 色={color_list[c]}  平坦度={flatness_dict[c]:.3e}  平坦重み={weights[c]:.3f}  重み={weights[c]*phi*beta:.3e}")
+
+    # 並列実行の準備
+    args_list = [
+        (c, xyz, labels, embed_bits, beta, weights, phi, k_neighbors, flatness_dict)
+        for c in cluster_ids
+    ]
+    with ProcessPoolExecutor() as executor:
+        results = executor.map(embed_cluster_channel, args_list)
+
+    # 各クラスタの埋め込み後xyzを集約
+    for c, cluster_xyz_after in results:
         idx = np.where(labels == c)[0]
-        pts = xyz[idx]
-        signal = pts[:, channel]
-        W = build_graph(pts, k=6)
-        basis, eigvals = gft_basis(W)
-        gft_coeffs = gft(signal, basis)
-        # print(f"クラスタ{c}: basis[0,:5]={basis[0,:5]}")
-        # print(f"クラスタ{c}: gft_coeffs[:5]={gft_coeffs[:5]}")
-        # phi = np.max(signal) + np.min(signal)
-        for bit_idx in range(min(embed_bits_length, len(gft_coeffs))):
-            w = embed_bits[bit_idx] * 2 - 1 # 0→-1, 1→+1
-            gft_coeffs[bit_idx] += beta * w
-        embed_signal = igft(gft_coeffs, basis)
-        xyz_after[idx, channel] = embed_signal
+        xyz_after[idx] = cluster_xyz_after
     return xyz_after
 
-def extract_watermark_xyz_single(xyz_emb, xyz_orig, labels, embed_bits_length, channel=0):
+def extract_cluster_bits(args):
+    c, xyz_emb, xyz_orig, labels, embed_bits_length = args
+    idx = np.where(labels == c)[0]
+    pts_emb = xyz_emb[idx]
+    pts_orig = xyz_orig[idx]
+    W = build_graph(pts_orig, k=6)
+    basis, eigvals = gft_basis_gpu(W)
+    Q_ = len(basis)
     bit_lists = [[] for _ in range(embed_bits_length)]
-    for c in np.unique(labels):
-        idx = np.where(labels == c)[0]
-        pts_emb = xyz_emb[idx]
-        pts_orig = xyz_orig[idx]
-        W = build_graph(pts_orig, k=6)
-        basis, eigvals = gft_basis(W)
+    for channel in range(3):
         gft_coeffs_emb = gft(pts_emb[:, channel], basis)
         gft_coeffs_orig = gft(pts_orig[:, channel], basis)
-        # print(f"クラスタ{c}: basis_extract[0,:5]={basis[0,:5]}")
-        # print(f"クラスタ{c}: gft_coeffs_emb[:5]={gft_coeffs_emb[:5]}")
-        # print(f"クラスタ{c}: gft_coeffs_orig[:5]={gft_coeffs_orig[:5]}")
-        for bit_idx in range(min(embed_bits_length, len(gft_coeffs_emb))):
-            diff = gft_coeffs_emb[bit_idx] - gft_coeffs_orig[bit_idx]
+        n_repeat = Q_ // embed_bits_length if embed_bits_length > 0 else 1
+        for bit_idx in range(embed_bits_length):
+            for rep in range(n_repeat):
+                i = bit_idx * n_repeat + rep
+                if i < Q_:
+                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                    bit = 1 if diff > 0 else 0
+                    bit_lists[bit_idx].append(bit)
+        for i in range(n_repeat * embed_bits_length, Q_):
+            bit_idx = i % embed_bits_length
+            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
             bit = 1 if diff > 0 else 0
             bit_lists[bit_idx].append(bit)
+    return bit_lists
+
+def extract_watermark_xyz_parallel(xyz_emb, xyz_orig, labels, embed_bits_length, max_workers=2):
+    """
+    並列版：3チャネル(x,y,z)・全クラスタ・全冗長分のビットを合体し、ビットごとに最頻値多数決
+    max_workers: 使用CPUコア数（PCが重くなりすぎないように2〜4推奨）
+    """
+    bit_lists = [[] for _ in range(embed_bits_length)]
+    args_list = [(c, xyz_emb, xyz_orig, labels, embed_bits_length) for c in np.unique(labels)]
+    # 並列実行
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(extract_cluster_bits, args_list)
+    # 各クラスタごとの結果を合体
+    for cluster_bits in results:
+        for bit_idx in range(embed_bits_length):
+            bit_lists[bit_idx].extend(cluster_bits[bit_idx])
+    # 最頻値多数決で最終ビット列
     extracted_bits = []
     for bits in bit_lists:
         counts = {0: bits.count(0), 1: bits.count(1)}
