@@ -18,16 +18,16 @@ if __name__ == "__main__":
     """
     # 基礎
     message_length = 100
-    num_clusters = 30
+    num_clusters = 50
     beta = 1e-3
     # 埋め込み容量アプローチ
     split_mode = 1
     # 平面曲面アプローチ
-    flatness_weighting = 1
+    flatness_weighting = 2
     min_weight = 0
     max_weight = 2.0
     # 周波数アプローチ
-    embed_percent = 0.5
+    embed_spectre = 1.0
 
     # 1. 点群読み込み・色情報の追加と表示
     input_file = "C:/bun_zipper.ply"
@@ -71,14 +71,14 @@ if __name__ == "__main__":
     # 5. 埋め込み
     xyz_after = STG50F.embed_watermark_xyz(xyz, labels, embed_bits, beta=beta,
                                         split_mode=split_mode , flatness_weighting=flatness_weighting, k_neighbors=20, 
-                                        min_weight=min_weight, max_weight=max_weight, embed_percent=embed_percent)
+                                        min_weight=min_weight, max_weight=max_weight, embed_spectre=embed_spectre)
 
     # OP. 攻撃
     # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.05, mode='uniform', seed=42)
 
     # 6. 抽出
     extracted_bits = STG50F.extract_watermark_xyz(xyz_after, xyz, labels, embed_bits_length=embed_bits_length,
-                                                  split_mode=split_mode, embed_percent=embed_percent)
+                                                  split_mode=split_mode, embed_spectre=embed_spectre)
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
 

@@ -115,7 +115,7 @@ def visualize_clusters(xyz, labels):
     tmp_pcd = o3d.geometry.PointCloud()
     tmp_pcd.points = o3d.utility.Vector3dVector(xyz)
     tmp_pcd.colors = o3d.utility.Vector3dVector(color_array)
-    o3d.visualization.draw_geometries([tmp_pcd])
+    # o3d.visualization.draw_geometries([tmp_pcd])
 
     # 各クラスタ番号に対する色のリストを返す
     color_list = [list(cluster_colors[i]) for i in range(n_clusters)]
@@ -226,13 +226,13 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
 def embed_watermark_xyz(
     xyz, labels, embed_bits, beta=0.01,
     split_mode=0, flatness_weighting=0, k_neighbors=20, 
-    min_weight=0.2, max_weight=1.8, embed_percent=1.0
+    min_weight=0.2, max_weight=1.8, embed_spectre=1.0
 ):
     """
     各クラスタでembed_bitsを
       - split_mode=0: 3チャネル全てに同じ情報（冗長化）
       - split_mode=1: 3分割してx/y/zにそれぞれ独立情報
-    としてGFT低周波embed_percent分だけ埋め込む
+    としてGFT低周波embed_spectre分だけ埋め込む
     """
     xyz_after = xyz.copy()
     cluster_ids = np.unique(labels)
@@ -268,7 +268,7 @@ def embed_watermark_xyz(
             basis, eigvals = gft_basis_gpu(W)
             gft_coeffs = gft(signal, basis)
             Q_ = len(gft_coeffs)
-            Q_embed = int(Q_ * embed_percent)
+            Q_embed = int(Q_ * embed_spectre)
             n_repeat = Q_embed // bits_len if bits_len > 0 else 1
             redundant_bits = repeat_bits_blockwise(bits, n_repeat, Q_embed)
             for i in range(Q_embed):
@@ -280,7 +280,7 @@ def embed_watermark_xyz(
 
 
 def extract_watermark_xyz(
-    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_percent=1.0
+    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_spectre=1.0
 ):
     """
     - split_mode=0: 3チャネル合体（冗長化多数決）
@@ -296,7 +296,7 @@ def extract_watermark_xyz(
             W = build_graph(pts_orig, k=6)
             basis, eigvals = gft_basis_gpu(W)
             Q_ = len(basis)
-            Q_extract = int(Q_ * embed_percent)
+            Q_extract = int(Q_ * embed_spectre)
             n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
             for channel in range(3):
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
@@ -338,7 +338,7 @@ def extract_watermark_xyz(
                 W = build_graph(pts_orig, k=6)
                 basis, eigvals = gft_basis_gpu(W)
                 Q_ = len(basis)
-                Q_extract = int(Q_ * embed_percent)
+                Q_extract = int(Q_ * embed_spectre)
                 n_repeat = Q_extract // bits_len if bits_len > 0 else 1
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
                 gft_coeffs_orig = gft(pts_orig[:, channel], basis)
