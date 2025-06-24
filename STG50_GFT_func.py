@@ -6,7 +6,7 @@ from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
 from concurrent.futures import ProcessPoolExecutor
-import cupy as cp
+# import cupy as cp
 
 def generate_random_string(length):
     """
@@ -115,7 +115,7 @@ def visualize_clusters(xyz, labels):
     tmp_pcd = o3d.geometry.PointCloud()
     tmp_pcd.points = o3d.utility.Vector3dVector(xyz)
     tmp_pcd.colors = o3d.utility.Vector3dVector(color_array)
-    # o3d.visualization.draw_geometries([tmp_pcd])
+    o3d.visualization.draw_geometries([tmp_pcd])
 
     # 各クラスタ番号に対する色のリストを返す
     color_list = [list(cluster_colors[i]) for i in range(n_clusters)]
@@ -192,16 +192,16 @@ def gft_basis(W):
     eigvals, eigvecs = np.linalg.eigh(L)
     return eigvecs, eigvals
 
-def gft_basis_gpu(W):
-    # 入力Wはnumpy配列（CPU）、ここでGPUに転送
-    W_gpu = cp.asarray(W)
-    D_gpu = cp.diag(W_gpu.sum(axis=1))
-    L_gpu = D_gpu - W_gpu
-    eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
-    # 必要ならCPU（numpy配列）に戻す
-    eigvals = cp.asnumpy(eigvals_gpu)
-    eigvecs = cp.asnumpy(eigvecs_gpu)
-    return eigvecs, eigvals
+# def gft_basis_gpu(W):
+#     # 入力Wはnumpy配列（CPU）、ここでGPUに転送
+#     W_gpu = cp.asarray(W)
+#     D_gpu = cp.diag(W_gpu.sum(axis=1))
+#     L_gpu = D_gpu - W_gpu
+#     eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
+#     # 必要ならCPU（numpy配列）に戻す
+#     eigvals = cp.asnumpy(eigvals_gpu)
+#     eigvecs = cp.asnumpy(eigvecs_gpu)
+#     return eigvecs, eigvals
 
 def gft(signal, basis):
     return basis.T @ signal
@@ -265,7 +265,7 @@ def embed_watermark_xyz(
                 continue  # このチャネルには何も埋め込まない
             signal = pts[:, channel]
             W = build_graph(pts, k=6)
-            basis, eigvals = gft_basis_gpu(W)
+            basis, eigvals = gft_basis(W)
             gft_coeffs = gft(signal, basis)
             Q_ = len(gft_coeffs)
             Q_embed = int(Q_ * embed_spectre)
@@ -294,7 +294,7 @@ def extract_watermark_xyz(
             pts_emb = xyz_emb[idx]
             pts_orig = xyz_orig[idx]
             W = build_graph(pts_orig, k=6)
-            basis, eigvals = gft_basis_gpu(W)
+            basis, eigvals = gft_basis(W)
             Q_ = len(basis)
             Q_extract = int(Q_ * embed_spectre)
             n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
@@ -336,7 +336,7 @@ def extract_watermark_xyz(
                 pts_emb = xyz_emb[idx]
                 pts_orig = xyz_orig[idx]
                 W = build_graph(pts_orig, k=6)
-                basis, eigvals = gft_basis_gpu(W)
+                basis, eigvals = gft_basis(W)
                 Q_ = len(basis)
                 Q_extract = int(Q_ * embed_spectre)
                 n_repeat = Q_extract // bits_len if bits_len > 0 else 1

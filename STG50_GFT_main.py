@@ -21,9 +21,9 @@ if __name__ == "__main__":
     num_clusters = 50
     beta = 1e-3
     # 埋め込み容量アプローチ
-    split_mode = 1
+    split_mode = 0
     # 平面曲面アプローチ
-    flatness_weighting = 2
+    flatness_weighting = 1
     min_weight = 0
     max_weight = 2.0
     # 周波数アプローチ
