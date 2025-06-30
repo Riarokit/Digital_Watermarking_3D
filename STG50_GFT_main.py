@@ -72,9 +72,19 @@ if __name__ == "__main__":
     xyz_after = STG50F.embed_watermark_xyz(xyz, labels, embed_bits, beta=beta,
                                         split_mode=split_mode , flatness_weighting=flatness_weighting, k_neighbors=20, 
                                         min_weight=min_weight, max_weight=max_weight, embed_spectre=embed_spectre)
+    diffs = np.linalg.norm(xyz_after - xyz, axis=1)
+    max_embed_shift = np.max(diffs)
+    print("最大埋め込み誤差:", max_embed_shift)
 
-    # OP. 攻撃
+    # OP. ノイズ攻撃
     # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.05, mode='uniform', seed=42)
+
+    # OP. 切り取り攻撃
+    xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
+    xyz_after = STG50F.reconstruct_point_cloud(xyz_after, xyz, threshold=max_embed_shift*2)
+    print(len(xyz_after))
+    xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
+    print(len(xyz_after))
 
     # 6. 抽出
     extracted_bits = STG50F.extract_watermark_xyz(xyz_after, xyz, labels, embed_bits_length=embed_bits_length,
@@ -83,6 +93,7 @@ if __name__ == "__main__":
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
 
     # 7. 評価
+    print(pcd_after)
     psnr = STG50F.calc_psnr_xyz(pcd_before, pcd_after)
 
     ############################################################################################################

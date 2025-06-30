@@ -282,22 +282,25 @@ def embed_watermark_xyz(
 def extract_watermark_xyz(
     xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_spectre=1.0
 ):
-    """
-    - split_mode=0: 3チャネル合体（冗長化多数決）
-    - split_mode=1: 3分割でそれぞれ独立に抽出（出力は3チャネルぶんのリスト）
-    """
     if split_mode == 0:
-        # 従来どおり：全チャネル合体でembed_bits_lengthだけ復元
         bit_lists = [[] for _ in range(embed_bits_length)]
         for c in np.unique(labels):
             idx = np.where(labels == c)[0]
+            if len(idx) <= 6:
+                continue  # 点数が少なすぎるクラスタはスキップ
+
             pts_emb = xyz_emb[idx]
             pts_orig = xyz_orig[idx]
-            W = build_graph(pts_orig, k=6)
+            if len(pts_emb) != len(pts_orig):
+                continue  # 点数不一致クラスタはスキップ
+
+            actual_k = min(6, len(idx) - 1)
+            W = build_graph(pts_orig, k=actual_k)
             basis, eigvals = gft_basis(W)
             Q_ = len(basis)
             Q_extract = int(Q_ * embed_spectre)
             n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
+
             for channel in range(3):
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
                 gft_coeffs_orig = gft(pts_orig[:, channel], basis)
@@ -313,7 +316,7 @@ def extract_watermark_xyz(
                     diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
                     bit = 1 if diff > 0 else 0
                     bit_lists[bit_idx].append(bit)
-        # 最頻値で最終ビット決定
+
         extracted_bits = []
         for bits in bit_lists:
             counts = {0: bits.count(0), 1: bits.count(1)}
@@ -322,26 +325,35 @@ def extract_watermark_xyz(
         return extracted_bits
 
     elif split_mode == 1:
-        # 3チャネル独立抽出（3分割で埋め込んだ場合に対応）
-        # np.array_splitで埋め込み時と同じように分割サイズを計算
         split_sizes = [len(arr) for arr in np.array_split(np.zeros(embed_bits_length), 3)]
         channel_bits_lists = [[] for _ in range(3)]
+
         for channel in range(3):
             bits_len = split_sizes[channel]
             if bits_len == 0:
                 continue
             bit_lists = [[] for _ in range(bits_len)]
+
             for c in np.unique(labels):
                 idx = np.where(labels == c)[0]
+                if len(idx) <= 6:
+                    continue
+
                 pts_emb = xyz_emb[idx]
                 pts_orig = xyz_orig[idx]
-                W = build_graph(pts_orig, k=6)
+                if len(pts_emb) != len(pts_orig):
+                    continue  # 点数不一致クラスタはスキップ
+
+                actual_k = min(6, len(idx) - 1)
+                W = build_graph(pts_orig, k=actual_k)
                 basis, eigvals = gft_basis(W)
                 Q_ = len(basis)
                 Q_extract = int(Q_ * embed_spectre)
                 n_repeat = Q_extract // bits_len if bits_len > 0 else 1
+
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
                 gft_coeffs_orig = gft(pts_orig[:, channel], basis)
+
                 for bit_idx in range(bits_len):
                     for rep in range(n_repeat):
                         i = bit_idx * n_repeat + rep
@@ -354,20 +366,23 @@ def extract_watermark_xyz(
                     diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
                     bit = 1 if diff > 0 else 0
                     bit_lists[bit_idx].append(bit)
-            # channelごと最頻値で決定
+
             extracted_bits_channel = []
             for bits in bit_lists:
                 counts = {0: bits.count(0), 1: bits.count(1)}
                 extracted_bit = 1 if counts[1] > counts[0] else 0
                 extracted_bits_channel.append(extracted_bit)
-            channel_bits_lists.append(extracted_bits_channel)
-        # 3チャネル分のビット列を1次元でまとめて返す
+            channel_bits_lists[channel] = extracted_bits_channel
+
         extracted_bits = np.concatenate(channel_bits_lists).astype(int).tolist()
         return extracted_bits
 
     else:
         raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
 
+
+
+######################################## 評価用 ##########################################################
 
 def calc_psnr_xyz(pcd_before, pcd_after, reverse=False):
     """
@@ -432,6 +447,96 @@ def add_noise(xyz, noise_percent=0.01, mode='uniform', seed=None, verbose=True):
         raise ValueError('modeは "uniform" か "gaussian"')
     xyz_noisy = xyz + noise
     return xyz_noisy
+
+def crop_point_cloud_xyz(xyz_after, crop_ratio=0.5, mode='center', verbose=True):
+    """
+    xyz_after に対して切り取り攻撃を行い、一部の点群のみを残し、表示する。
+
+    Parameters:
+    - xyz_after (np.ndarray): 埋め込み後の点群座標（N×3）
+    - crop_ratio (float): 残す点の割合（0.0～1.0]
+    - mode (str): 'center'（中心部を残す）または 'edge'（端部を残す）
+    - verbose (bool): 情報表示の有無
+
+    Returns:
+    - xyz_cropped (np.ndarray): 切り取り後の点群座標
+    """
+    import open3d as o3d
+    assert 0.0 < crop_ratio <= 1.0, "crop_ratioは (0, 1] で指定してください"
+    N = xyz_after.shape[0]
+    keep_n = int(N * crop_ratio)
+
+    center = np.mean(xyz_after, axis=0)
+    dists = np.linalg.norm(xyz_after - center, axis=1)
+
+    if mode == 'center':
+        keep_indices = np.argsort(dists)[:keep_n]
+    elif mode == 'edge':
+        keep_indices = np.argsort(dists)[-keep_n:]
+    else:
+        raise ValueError("modeは 'center' または 'edge' を指定してください")
+
+    xyz_cropped = xyz_after[keep_indices]
+
+    if verbose:
+        print(f"切り取り攻撃 ({mode}): 元点数={N} → 残点数={keep_n} ({crop_ratio*100:.1f}%)")
+
+    # 可視化
+    cropped_pcd = o3d.geometry.PointCloud()
+    cropped_pcd.points = o3d.utility.Vector3dVector(xyz_cropped)
+    cropped_pcd.paint_uniform_color([1, 0.6, 0])  # オレンジ系で表示
+    o3d.visualization.draw_geometries([cropped_pcd], window_name="Cropped Point Cloud")
+
+    return xyz_cropped
+
+
+def reconstruct_point_cloud(xyz_after, xyz_orig, threshold=0.01, verbose=True):
+    """
+    欠損した点を元点群（xyz_orig）から復元して返す。
+
+    Parameters:
+    - xyz_after (np.ndarray): 攻撃後の点群
+    - xyz_orig (np.ndarray): 元点群（完全版）
+    - threshold (float): 一致判定の距離しきい値
+    - verbose (bool): ログ表示有無
+
+    Returns:
+    - xyz_reconstructed (np.ndarray): 点が補完されたxyz_after
+    """
+    tree = cKDTree(xyz_after)
+    dists, _ = tree.query(xyz_orig, k=1)
+    missing_mask = dists > threshold
+    missing_points = xyz_orig[missing_mask]
+    xyz_reconstructed = np.vstack([xyz_after, missing_points])
+    
+    if verbose:
+        print(f"[Reconstruction] 復元された点数: {len(missing_points)} / {len(xyz_orig)}")
+        print("再構成後xyzのshape:", xyz_reconstructed.shape)
+        print("距離の最小:", np.min(dists))
+        print("距離の最大:", np.max(dists))
+        print("平均距離:", np.mean(dists))
+    return xyz_reconstructed
+
+
+def reorder_point_cloud(xyz_after, xyz_orig, verbose=True):
+    """
+    xyz_afterの順番を、xyz_origと最も近い点で対応づけて並び替える。
+
+    Parameters:
+    - xyz_after (np.ndarray): 復元後点群（点数 = xyz_orig以上）
+    - xyz_orig (np.ndarray): 元点群（基準順）
+
+    Returns:
+    - xyz_reordered (np.ndarray): 並べ替え後の点群（xyz_origと順序一致）
+    """
+    tree = cKDTree(xyz_after)
+    _, indices = tree.query(xyz_orig, k=1)
+    xyz_reordered = xyz_after[indices]
+
+    if verbose:
+        print(f"[Reordering] 順序を xyz_orig に再整列しました。")
+
+    return xyz_reordered
 
 
 ##################################### 参考用 ##########################################
@@ -529,7 +634,7 @@ def embed_cluster_channel(args):
     for channel in range(3):  # x=0, y=1, z=2
         signal = pts[:, channel]
         W = build_graph(pts, k=6)
-        basis, eigvals = gft_basis_gpu(W)
+        basis, eigvals = gft_basis(W)
         gft_coeffs = gft(signal, basis)
         Q_ = len(gft_coeffs)
         n_repeat = Q_ // len(embed_bits) if len(embed_bits) > 0 else 1
@@ -584,7 +689,7 @@ def extract_cluster_bits(args):
     pts_emb = xyz_emb[idx]
     pts_orig = xyz_orig[idx]
     W = build_graph(pts_orig, k=6)
-    basis, eigvals = gft_basis_gpu(W)
+    basis, eigvals = gft_basis(W)
     Q_ = len(basis)
     bit_lists = [[] for _ in range(embed_bits_length)]
     for channel in range(3):
