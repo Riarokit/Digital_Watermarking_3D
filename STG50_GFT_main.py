@@ -21,7 +21,7 @@ if __name__ == "__main__":
     num_clusters = 50
     beta = 1e-3
     # 埋め込み容量アプローチ
-    split_mode = 0
+    split_mode = 1
     # 平面曲面アプローチ
     flatness_weighting = 1
     min_weight = 0
@@ -48,7 +48,10 @@ if __name__ == "__main__":
 
     # 4. クラスタリング
     start = time.time()
-    labels = STG50F.kmeans_cluster_points(xyz, num_clusters=num_clusters, seed=42)
+    labels = STG50F.kmeans_cluster_points(xyz, num_clusters=num_clusters)
+    # labels = STG50F.region_growing_cluster_points(xyz)
+    # labels = STG50F.ransac_cluster_points(xyz)
+    # labels = STG50F.dbscan_cluster_points(xyz)
 
     ########################################## OP. 色情報埋め込み #############################################
 
@@ -80,11 +83,11 @@ if __name__ == "__main__":
     # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.05, mode='uniform', seed=42)
 
     # OP. 切り取り攻撃
-    xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
-    xyz_after = STG50F.reconstruct_point_cloud(xyz_after, xyz, threshold=max_embed_shift*2)
-    print(len(xyz_after))
-    xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
-    print(len(xyz_after))
+    # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
+    # xyz_after = STG50F.reconstruct_point_cloud(xyz_after, xyz, threshold=max_embed_shift*2)
+    # print(len(xyz_after))
+    # xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
+    # print(len(xyz_after))
 
     # 6. 抽出
     extracted_bits = STG50F.extract_watermark_xyz(xyz_after, xyz, labels, embed_bits_length=embed_bits_length,

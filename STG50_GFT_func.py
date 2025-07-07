@@ -6,7 +6,8 @@ from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
 from concurrent.futures import ProcessPoolExecutor
-# import cupy as cp
+from sklearn.neighbors import NearestNeighbors
+import cupy as cp
 
 def generate_random_string(length):
     """
@@ -91,6 +92,148 @@ def kmeans_cluster_points(xyz, num_clusters=8, seed=42):
     min_label = unique[np.argmin(counts)]
     print(f"最も点数が少ないクラスタ: {min_label}（点数: {min_count}）")
     return labels
+
+def region_growing_cluster_points(
+    xyz,
+    angle_thresh_deg=3.0,
+    distance_thresh=0.003,
+    min_cluster_size=100,
+    knn_normal=30,
+    knn_region=15
+):
+    """
+    距離制限 + 法線類似度によるRegion Growingクラスタリング（クラス風の明示的実装）
+
+    Parameters:
+    - xyz: Nx3座標（np.ndarray）
+    - angle_thresh_deg: 法線の最大角度差 [deg]
+    - distance_thresh: 空間距離の最大閾値 [m]
+    - min_cluster_size: クラスタ最小点数
+    - knn_normal: 法線推定用の近傍点数
+    - knn_region: クラスタ拡張用の近傍点数
+
+    Returns:
+    - labels: 各点のクラスタ番号（np.ndarray, shape[N]）
+    """
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=knn_normal))
+    pcd.orient_normals_consistent_tangent_plane(knn_normal)
+    normals = np.asarray(pcd.normals)
+
+    N = len(xyz)
+    visited = np.zeros(N, dtype=bool)
+    labels = np.full(N, -1, dtype=int)
+    label = 0
+    cos_thresh = np.cos(np.deg2rad(angle_thresh_deg))
+
+    # 空間近傍検索用
+    neighbors = NearestNeighbors(n_neighbors=knn_region).fit(xyz)
+
+    for i in range(N):
+        if visited[i]:
+            continue
+
+        seed_queue = [i]
+        visited[i] = True
+        cluster = [i]
+
+        while seed_queue:
+            idx = seed_queue.pop()
+            nbrs = neighbors.kneighbors([xyz[idx]], return_distance=False)[0]
+
+            for n in nbrs:
+                if visited[n]:
+                    continue
+                dot = np.dot(normals[idx], normals[n])
+                dist = np.linalg.norm(xyz[idx] - xyz[n])
+                if dot >= cos_thresh and dist <= distance_thresh:
+                    visited[n] = True
+                    seed_queue.append(n)
+                    cluster.append(n)
+
+        if len(cluster) >= min_cluster_size:
+            labels[cluster] = label
+            label += 1
+
+    print(f"[RegionGrowing] 検出されたクラスタ数: {label}")
+    return labels
+
+
+def ransac_cluster_points(xyz, distance_threshold=0.004, min_points=100, max_planes=50):
+    """
+    RANSACによる平面クラスタ抽出（繰り返し）
+
+    Parameters:
+    distance_threshold: 平面からの最大距離。この距離以内の点を「平面に乗っている」とみなす
+    min_points: クラスタとして採用するための最小点数
+    max_planes: 検出する平面クラスタの最大数（ループ上限）
+
+    Returns:
+    - labels: 各点のクラスタ番号（未分類は -1）
+    """
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    labels = np.full(len(xyz), -1)
+    current_label = 0
+
+    remaining_pcd = pcd
+    remaining_indices = np.arange(len(xyz))  # xyz中のインデックスを追跡
+
+    while current_label < max_planes and len(remaining_pcd.points) > 0:
+        plane_model, inliers = remaining_pcd.segment_plane(
+            distance_threshold=distance_threshold,
+            ransac_n=3,
+            num_iterations=1000
+        )
+        if len(inliers) < min_points:
+            break
+
+        # 元のxyz上のインデックスに変換してlabel付け
+        global_inliers = remaining_indices[inliers]
+        labels[global_inliers] = current_label
+
+        # 残りの点群とインデックスを更新
+        remaining_pcd = remaining_pcd.select_by_index(inliers, invert=True)
+        remaining_indices = np.delete(remaining_indices, inliers)
+        current_label += 1
+
+    unique, counts = np.unique(labels[labels != -1], return_counts=True)
+    if len(unique) > 0:
+        min_count = np.min(counts)
+        min_label = unique[np.argmin(counts)]
+        print(f"[RANSAC] 最も点数が少ないクラスタ: {min_label}（点数: {min_count}）")
+    else:
+        print("[RANSAC] クラスタが検出されませんでした")
+
+    print(f"[RANSAC] 検出されたクラスタ数: {current_label}")
+    return labels
+
+
+def dbscan_cluster_points(xyz, eps=0.004, min_points=100):
+    """
+    DBSCANによるクラスタリング（密度ベース）
+
+    Parameters:
+    eps: 点と点の最大距離。これ以下の距離の点を「近い」とみなす
+    min_points: クラスタとして認識するための最小近傍点数
+
+    Returns:
+    - labels: 各点のクラスタ番号（ノイズ点は -1）
+    """
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    labels = np.array(pcd.cluster_dbscan(eps=eps, min_points=min_points, print_progress=False))
+
+    unique, counts = np.unique(labels[labels != -1], return_counts=True)
+    if len(unique) > 0:
+        min_count = np.min(counts)
+        min_label = unique[np.argmin(counts)]
+        print(f"[DBSCAN] 最も点数が少ないクラスタ: {min_label}（点数: {min_count}）")
+    else:
+        print("[DBSCAN] 有効なクラスタがありません")
+    return labels
+
 
 def visualize_clusters(xyz, labels):
     """
@@ -192,16 +335,16 @@ def gft_basis(W):
     eigvals, eigvecs = np.linalg.eigh(L)
     return eigvecs, eigvals
 
-# def gft_basis_gpu(W):
-#     # 入力Wはnumpy配列（CPU）、ここでGPUに転送
-#     W_gpu = cp.asarray(W)
-#     D_gpu = cp.diag(W_gpu.sum(axis=1))
-#     L_gpu = D_gpu - W_gpu
-#     eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
-#     # 必要ならCPU（numpy配列）に戻す
-#     eigvals = cp.asnumpy(eigvals_gpu)
-#     eigvecs = cp.asnumpy(eigvecs_gpu)
-#     return eigvecs, eigvals
+def gft_basis_gpu(W):
+    # 入力Wはnumpy配列（CPU）、ここでGPUに転送
+    W_gpu = cp.asarray(W)
+    D_gpu = cp.diag(W_gpu.sum(axis=1))
+    L_gpu = D_gpu - W_gpu
+    eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
+    # 必要ならCPU（numpy配列）に戻す
+    eigvals = cp.asnumpy(eigvals_gpu)
+    eigvecs = cp.asnumpy(eigvecs_gpu)
+    return eigvecs, eigvals
 
 def gft(signal, basis):
     return basis.T @ signal
@@ -257,6 +400,8 @@ def embed_watermark_xyz(
 
     for c in cluster_ids:
         idx = np.where(labels == c)[0]
+        if len(idx) <= 50:
+                continue  # 点数が少なすぎるクラスタはスキップ
         pts = xyz[idx]
         for channel in range(3):  # 0:x, 1:y, 2:z
             bits = embed_bits_per_channel[channel]
@@ -286,7 +431,7 @@ def extract_watermark_xyz(
         bit_lists = [[] for _ in range(embed_bits_length)]
         for c in np.unique(labels):
             idx = np.where(labels == c)[0]
-            if len(idx) <= 6:
+            if len(idx) <= 50:
                 continue  # 点数が少なすぎるクラスタはスキップ
 
             pts_emb = xyz_emb[idx]
