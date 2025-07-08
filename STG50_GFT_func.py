@@ -7,7 +7,7 @@ from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
 from concurrent.futures import ProcessPoolExecutor
 from sklearn.neighbors import NearestNeighbors
-import cupy as cp
+# import cupy as cp
 
 def generate_random_string(length):
     """
@@ -234,6 +234,43 @@ def dbscan_cluster_points(xyz, eps=0.004, min_points=100):
         print("[DBSCAN] 有効なクラスタがありません")
     return labels
 
+def split_large_clusters(xyz, labels, limit_points=4000, seed=42):
+    """
+    指定したクラスタラベル群をもとに、点数が limit_points を超えるクラスタを再クラスタリングし、
+    labels を更新して返す。
+
+    Parameters:
+    - xyz: Nx3 点群座標
+    - labels: 長さNのクラスタ番号配列（int）
+    - limit_points: 1クラスタの最大点数上限
+    - seed: 再クラスタリング時のKMeansシード
+
+    Returns:
+    - new_labels: 長さNの更新後クラスタ番号配列
+    """
+    new_labels = labels.copy()
+    current_max_label = labels.max()
+    label_offset = current_max_label + 1
+
+    for c in np.unique(labels):
+        idx = np.where(labels == c)[0]
+        if len(idx) <= limit_points:
+            continue
+
+        pts = xyz[idx]
+        n_subclusters = int(np.ceil(len(idx) / limit_points))
+        kmeans = KMeans(n_clusters=n_subclusters, random_state=seed)
+        sub_labels = kmeans.fit_predict(pts)
+
+        # ラベルを更新
+        for sub in range(n_subclusters):
+            sub_idx = idx[sub_labels == sub]
+            new_labels[sub_idx] = label_offset
+            label_offset += 1
+
+        print(f"[Split] クラスタ {c}（{len(idx)}点）を {n_subclusters} 分割 → 新ラベル {label_offset - n_subclusters}〜{label_offset - 1}")
+
+    return new_labels
 
 def visualize_clusters(xyz, labels):
     """
@@ -335,16 +372,16 @@ def gft_basis(W):
     eigvals, eigvecs = np.linalg.eigh(L)
     return eigvecs, eigvals
 
-def gft_basis_gpu(W):
-    # 入力Wはnumpy配列（CPU）、ここでGPUに転送
-    W_gpu = cp.asarray(W)
-    D_gpu = cp.diag(W_gpu.sum(axis=1))
-    L_gpu = D_gpu - W_gpu
-    eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
-    # 必要ならCPU（numpy配列）に戻す
-    eigvals = cp.asnumpy(eigvals_gpu)
-    eigvecs = cp.asnumpy(eigvecs_gpu)
-    return eigvecs, eigvals
+# def gft_basis_gpu(W):
+#     # 入力Wはnumpy配列（CPU）、ここでGPUに転送
+#     W_gpu = cp.asarray(W)
+#     D_gpu = cp.diag(W_gpu.sum(axis=1))
+#     L_gpu = D_gpu - W_gpu
+#     eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
+#     # 必要ならCPU（numpy配列）に戻す
+#     eigvals = cp.asnumpy(eigvals_gpu)
+#     eigvecs = cp.asnumpy(eigvecs_gpu)
+#     return eigvecs, eigvals
 
 def gft(signal, basis):
     return basis.T @ signal

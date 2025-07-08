@@ -48,10 +48,11 @@ if __name__ == "__main__":
 
     # 4. クラスタリング
     start = time.time()
-    labels = STG50F.kmeans_cluster_points(xyz, num_clusters=num_clusters)
+    # labels = STG50F.kmeans_cluster_points(xyz, num_clusters=num_clusters)
     # labels = STG50F.region_growing_cluster_points(xyz)
-    # labels = STG50F.ransac_cluster_points(xyz)
     # labels = STG50F.dbscan_cluster_points(xyz)
+    labels = STG50F.ransac_cluster_points(xyz)
+    # labels = STG50F.split_large_clusters(xyz, labels, limit_points=2000)
 
     ########################################## OP. 色情報埋め込み #############################################
 
@@ -80,7 +81,7 @@ if __name__ == "__main__":
     print("最大埋め込み誤差:", max_embed_shift)
 
     # OP. ノイズ攻撃
-    # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.05, mode='uniform', seed=42)
+    # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.008, mode='uniform', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
@@ -110,5 +111,5 @@ if __name__ == "__main__":
     print(f"抽出文字列：{extracted_message}")
     print(f"埋込ビット：{len(embed_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
-    print(f"ビット一致率: {accuracy:.3f}")
-    print(f"全体実行時間: {all_time:.2f}秒")
+    print(f"BER: {accuracy:.4f}")
+    print(f"実行時間: {all_time:.2f}秒")
