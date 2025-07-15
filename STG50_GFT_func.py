@@ -461,56 +461,44 @@ def embed_watermark_xyz(
     return xyz_after
 
 
-def extract_watermark_xyz_check(
-    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_spectre=1.0,
-    error_correction="none"
+def extract_watermark_xyz(
+    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_spectre=1.0
 ):
-    if error_correction == "parity":
-        checker = lambda bits: check_parity_code(bits)
-        decoder = lambda bits: bits[:-len(bits)//(8+1)] if checker(bits) else None
-    elif error_correction == "hamming":
-        decoder = lambda bits: hamming74_decode(bits)
-    else:
-        decoder = lambda bits: bits
-
-    total_clusters = 0
-    passed_clusters = 0
-
     if split_mode == 0:
-        skip_threshold = embed_bits_length / 2
+        skip_threshold = embed_bits_length/2
         bit_lists = [[] for _ in range(embed_bits_length)]
-
         for c in np.unique(labels):
             idx = np.where(labels == c)[0]
             if len(idx) <= skip_threshold:
-                continue
+                continue  # 点数が少なすぎるクラスタはスキップ
+
             pts_emb = xyz_emb[idx]
             pts_orig = xyz_orig[idx]
             if len(pts_emb) != len(pts_orig):
-                continue
-            total_clusters += 1
+                continue  # 点数不一致クラスタはスキップ
 
             actual_k = min(6, len(idx) - 1)
             W = build_graph(pts_orig, k=actual_k)
             basis, eigvals = gft_basis(W)
             Q_ = len(basis)
             Q_extract = int(Q_ * embed_spectre)
+            n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
 
-            full_bits = []
             for channel in range(3):
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
                 gft_coeffs_orig = gft(pts_orig[:, channel], basis)
-                for i in range(Q_extract):
-                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                    full_bits.append(1 if diff > 0 else 0)
-
-            decoded = decoder(full_bits)
-            if decoded and len(decoded) >= embed_bits_length:
-                passed_clusters += 1
                 for bit_idx in range(embed_bits_length):
-                    bit_lists[bit_idx].append(decoded[bit_idx])
-
-        print(f"[Extract] エラー訂正チェック通過クラスタ数: {passed_clusters} / {total_clusters}")
+                    for rep in range(n_repeat):
+                        i = bit_idx * n_repeat + rep
+                        if i < Q_extract:
+                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            bit = 1 if diff > 0 else 0
+                            bit_lists[bit_idx].append(bit)
+                for i in range(n_repeat * embed_bits_length, Q_extract):
+                    bit_idx = i % embed_bits_length
+                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                    bit = 1 if diff > 0 else 0
+                    bit_lists[bit_idx].append(bit)
 
         extracted_bits = []
         for bits in bit_lists:
@@ -520,57 +508,57 @@ def extract_watermark_xyz_check(
         return extracted_bits
 
     elif split_mode == 1:
-        skip_threshold = embed_bits_length / 5
+        skip_threshold = embed_bits_length/5
         split_sizes = [len(arr) for arr in np.array_split(np.zeros(embed_bits_length), 3)]
         channel_bits_lists = [[] for _ in range(3)]
-        total_clusters = 0
-        passed_clusters = 0
 
-        for c in np.unique(labels):
-            idx = np.where(labels == c)[0]
-            if len(idx) <= skip_threshold:
+        for channel in range(3):
+            bits_len = split_sizes[channel]
+            if bits_len == 0:
                 continue
-            pts_emb = xyz_emb[idx]
-            pts_orig = xyz_orig[idx]
-            if len(pts_emb) != len(pts_orig):
-                continue
-            total_clusters += 1
+            bit_lists = [[] for _ in range(bits_len)]
 
-            actual_k = min(6, len(idx) - 1)
-            W = build_graph(pts_orig, k=actual_k)
-            basis, eigvals = gft_basis(W)
-            Q_ = len(basis)
-            Q_extract = int(Q_ * embed_spectre)
+            for c in np.unique(labels):
+                idx = np.where(labels == c)[0]
+                if len(idx) <= skip_threshold:
+                    continue
 
-            full_bits = []
-            for channel in range(3):
+                pts_emb = xyz_emb[idx]
+                pts_orig = xyz_orig[idx]
+                if len(pts_emb) != len(pts_orig):
+                    continue  # 点数不一致クラスタはスキップ
+
+                actual_k = min(6, len(idx) - 1)
+                W = build_graph(pts_orig, k=actual_k)
+                basis, eigvals = gft_basis(W)
+                Q_ = len(basis)
+                Q_extract = int(Q_ * embed_spectre)
+                n_repeat = Q_extract // bits_len if bits_len > 0 else 1
+
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
                 gft_coeffs_orig = gft(pts_orig[:, channel], basis)
-                for i in range(Q_extract):
+
+                for bit_idx in range(bits_len):
+                    for rep in range(n_repeat):
+                        i = bit_idx * n_repeat + rep
+                        if i < Q_extract:
+                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            bit = 1 if diff > 0 else 0
+                            bit_lists[bit_idx].append(bit)
+                for i in range(n_repeat * bits_len, Q_extract):
+                    bit_idx = i % bits_len
                     diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                    full_bits.append(1 if diff > 0 else 0)
+                    bit = 1 if diff > 0 else 0
+                    bit_lists[bit_idx].append(bit)
 
-            decoded = decoder(full_bits)
-            if decoded and len(decoded) >= embed_bits_length:
-                passed_clusters += 1
-                split_bits = np.array_split(decoded, 3)
-                for channel in range(3):
-                    for bit in split_bits[channel]:
-                        channel_bits_lists[channel].append(bit)
-
-        print(f"[Extract] エラー訂正チェック通過クラスタ数: {passed_clusters} / {total_clusters}")
-
-        extracted_bits = []
-        for bits in channel_bits_lists:
-            channel_decoded = []
-            bit_count = len(bits) // split_sizes[channel_bits_lists.index(bits)] if split_sizes[channel_bits_lists.index(bits)] > 0 else 0
-            for bit_idx in range(split_sizes[channel_bits_lists.index(bits)]):
-                selected = bits[bit_idx::split_sizes[channel_bits_lists.index(bits)]]
-                counts = {0: selected.count(0), 1: selected.count(1)}
+            extracted_bits_channel = []
+            for bits in bit_lists:
+                counts = {0: bits.count(0), 1: bits.count(1)}
                 extracted_bit = 1 if counts[1] > counts[0] else 0
-                channel_decoded.append(extracted_bit)
-            extracted_bits.extend(channel_decoded)
+                extracted_bits_channel.append(extracted_bit)
+            channel_bits_lists[channel] = extracted_bits_channel
 
+        extracted_bits = np.concatenate(channel_bits_lists).astype(int).tolist()
         return extracted_bits
 
     else:
@@ -649,7 +637,7 @@ def extract_watermark_xyz_check(
     passed_clusters = 0
 
     if split_mode == 0:
-        skip_threshold = embed_bits_length/2
+        skip_threshold = embed_bits_length / 2
         bit_lists = [[] for _ in range(embed_bits_length)]
         for c in np.unique(labels):
             idx = np.where(labels == c)[0]
@@ -660,48 +648,44 @@ def extract_watermark_xyz_check(
             if len(pts_emb) != len(pts_orig):
                 continue
             total_clusters += 1
+
             actual_k = min(6, len(idx) - 1)
             W = build_graph(pts_orig, k=actual_k)
             basis, eigvals = gft_basis(W)
             Q_ = len(basis)
             Q_extract = int(Q_ * embed_spectre)
             n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
+            raw_bits_concat = []
 
             for channel in range(3):
-                raw_bits = []
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
                 gft_coeffs_orig = gft(pts_orig[:, channel], basis)
-                for i in range(Q_extract):
-                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                    raw_bits.append(1 if diff > 0 else 0)
-                decoded = decoder(raw_bits)
-                if decoded and len(decoded) >= embed_bits_length:
-                    passed_clusters += 1
-                    for bit_idx in range(embed_bits_length):
-                        bit_lists[bit_idx].append(decoded[bit_idx])
+                raw_bits = [1 if (gft_coeffs_emb[i] - gft_coeffs_orig[i]) > 0 else 0 for i in range(Q_extract)]
+                raw_bits_concat.extend(raw_bits)
 
-        print(f"[Extract] エラー訂正チェック通過クラスタ数: {passed_clusters} / {total_clusters}")
+            decoded = decoder(raw_bits_concat)
+            if decoded and len(decoded) >= embed_bits_length:
+                passed_clusters += 1
+                for bit_idx in range(embed_bits_length):
+                    bit_lists[bit_idx].append(decoded[bit_idx])
 
         extracted_bits = []
         for bits in bit_lists:
             counts = {0: bits.count(0), 1: bits.count(1)}
-            extracted_bit = 1 if counts[1] > counts[0] else 0
-            extracted_bits.append(extracted_bit)
+            extracted_bits.append(1 if counts[1] > counts[0] else 0)
+
+        print(f"[Extract] エラー訂正チェック通過クラスタ数: {passed_clusters} / {total_clusters}")
         return extracted_bits
 
     elif split_mode == 1:
-        skip_threshold = embed_bits_length/5
+        skip_threshold = embed_bits_length / 5
         split_sizes = [len(arr) for arr in np.array_split(np.zeros(embed_bits_length), 3)]
         channel_bits_lists = [[] for _ in range(3)]
-        total_clusters = 0
-        passed_clusters = 0
-
         for channel in range(3):
             bits_len = split_sizes[channel]
             if bits_len == 0:
                 continue
             bit_lists = [[] for _ in range(bits_len)]
-
             for c in np.unique(labels):
                 idx = np.where(labels == c)[0]
                 if len(idx) <= skip_threshold:
@@ -711,6 +695,7 @@ def extract_watermark_xyz_check(
                 if len(pts_emb) != len(pts_orig):
                     continue
                 total_clusters += 1
+
                 actual_k = min(6, len(idx) - 1)
                 W = build_graph(pts_orig, k=actual_k)
                 basis, eigvals = gft_basis(W)
@@ -721,10 +706,7 @@ def extract_watermark_xyz_check(
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
                 gft_coeffs_orig = gft(pts_orig[:, channel], basis)
 
-                raw_bits = []
-                for i in range(Q_extract):
-                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                    raw_bits.append(1 if diff > 0 else 0)
+                raw_bits = [1 if (gft_coeffs_emb[i] - gft_coeffs_orig[i]) > 0 else 0 for i in range(Q_extract)]
                 decoded = decoder(raw_bits)
                 if decoded and len(decoded) >= bits_len:
                     passed_clusters += 1
@@ -734,12 +716,11 @@ def extract_watermark_xyz_check(
             extracted_bits_channel = []
             for bits in bit_lists:
                 counts = {0: bits.count(0), 1: bits.count(1)}
-                extracted_bit = 1 if counts[1] > counts[0] else 0
-                extracted_bits_channel.append(extracted_bit)
+                extracted_bits_channel.append(1 if counts[1] > counts[0] else 0)
             channel_bits_lists[channel] = extracted_bits_channel
 
-        print(f"[Extract] エラー訂正チェック通過クラスタ数: {passed_clusters} / {total_clusters}")
         extracted_bits = np.concatenate(channel_bits_lists).astype(int).tolist()
+        print(f"[Extract] エラー訂正チェック通過クラスタ数: {passed_clusters} / {total_clusters}")
         return extracted_bits
 
     else:

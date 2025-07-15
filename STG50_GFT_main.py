@@ -19,7 +19,7 @@ if __name__ == "__main__":
     message_length = 100
     beta = 1e-3
     # 埋め込み容量アプローチ
-    split_mode = 1
+    split_mode = 0
     # 平面曲面アプローチ
     flatness_weighting = 1
     min_weight = 0
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     # 6. 抽出
     extracted_bits = STG50F.extract_watermark_xyz_check(xyz_after, xyz, labels, embed_bits_length=embed_bits_length,
                                                   split_mode=split_mode, embed_spectre=embed_spectre,
-                                                  error_correction="hamming")
+                                                  error_correction="parity")
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
 
