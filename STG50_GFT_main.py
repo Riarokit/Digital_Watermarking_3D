@@ -13,16 +13,19 @@ if __name__ == "__main__":
     split_mode = 0:チャネル間に同一の埋め込み, 1:チャネル間に異なる埋め込み
     flatness_weighting = 0:なし, 1:平面部重み, 2:曲面部重み
     min_weight, max_weight = 最小・最大重み係数 (平均1になるようにする)
+    error_correction = "none", "parity", "hamming" のいずれか
     """
     # 基礎
-    message_length = 100
+    message_length = 20
     beta = 1e-3
     # 埋め込み容量アプローチ
-    split_mode = 1
+    split_mode = 0
     # 平面曲面アプローチ
     flatness_weighting = 1
     min_weight = 0
     max_weight = 2.0
+    # 誤り訂正符号アプローチ
+    error_correction = "parity"
 
     # 1. 点群取得
     input_file = "C:/bun_zipper.ply"
@@ -37,7 +40,7 @@ if __name__ == "__main__":
     xyz = np.asarray(pcd_before.points)
     colors = np.asarray(pcd_before.colors)
     upper_cluster_num = int(len(pcd_before.points) / (message_length*8*2/3))
-    lower_cluster_num = int(len(pcd_before.points) / 2000)
+    lower_cluster_num = int(len(pcd_before.points) / 2500)
     print(f"望ましいクラスタ数: {lower_cluster_num} - {upper_cluster_num}")
 
     # 3. 埋め込みビット生成
@@ -51,20 +54,28 @@ if __name__ == "__main__":
     labels = STG50F.kmeans_cluster_points(xyz)
     # labels = STG50F.region_growing_cluster_points(xyz)
     # labels = STG50F.ransac_cluster_points(xyz)
-    # labels = STG50F.split_large_clusters(xyz, labels, limit_points=2000)
+    # labels = STG50F.split_large_clusters(xyz, labels, limit_points=3000)
 
     # 5. 埋め込み
-    xyz_after, checked_bits_length = STG50F.embed_watermark_xyz_check(
+    # xyz_after = STG50F.embed_watermark_xyz(
+    #     xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
+    #     flatness_weighting=flatness_weighting, k_neighbors=20, 
+    #     min_weight=min_weight, max_weight=max_weight
+    # )
+
+    # OP. 誤り訂正符号付加ver.埋め込み
+    xyz_after, checked_bit_length = STG50F.embed_watermark_xyz_check(
         xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
         flatness_weighting=flatness_weighting, k_neighbors=20, 
-        min_weight=min_weight, max_weight=max_weight, error_correction="hamming"
+        min_weight=min_weight, max_weight=max_weight, error_correction=error_correction
     )
+
     diffs = np.linalg.norm(xyz_after - xyz, axis=1)
     max_embed_shift = np.max(diffs)
     print("最大埋め込み誤差:", max_embed_shift)
 
     # OP. ノイズ攻撃
-    # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.005, mode='uniform', seed=42)
+    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.005, mode='uniform', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
@@ -74,14 +85,19 @@ if __name__ == "__main__":
     # print(len(xyz_after))
 
     # 6. 抽出
+    # extracted_bits = STG50F.extract_watermark_xyz(
+    #     xyz_after, xyz, labels, watermark_bits_length, split_mode=split_mode
+    # )
+
+    # OP. 誤り訂正符号付加ver.抽出
     extracted_bits = STG50F.extract_watermark_xyz_check(
-        xyz_after, xyz, labels, watermark_bits_length, checked_bits_length,
-        split_mode=split_mode, error_correction="hamming"
+        xyz_after, xyz, labels, watermark_bits_length, checked_bit_length,
+        split_mode=split_mode,  error_correction=error_correction
     )
-    pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
-    pcd_after.colors = o3d.utility.Vector3dVector(colors)
 
     # 7. 評価
+    pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
+    pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
     psnr = STG50F.calc_psnr_xyz(pcd_before, pcd_after)
 

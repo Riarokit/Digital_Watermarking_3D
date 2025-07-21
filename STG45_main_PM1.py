@@ -2,7 +2,7 @@ import open3d as o3d
 import numpy as np
 import STG45_func as STG45F
 import random
-import modules.functions as fct
+# import modules.functions as fct
 
 """
 main関数概要:
@@ -24,10 +24,10 @@ OP: 攻撃や色付けなどのオプション手順
 
 # quantized = [埋め込みなし], embedded = [埋め込みあり]でエンコード。ファイル名は同じでも別でもよい。
 input_file = "C:/bun_zipper.ply"
-quantized_output_path_location = "C:/Users/ryoi1/OneDrive/ドキュメント/B3/情報通信ゼミナール/2023.12_GitHub/LiDAR-1/Python/data/txtdata/STG45_point.txt"
-quantized_output_path_color = "C:/Users/ryoi1/OneDrive/ドキュメント/B3/情報通信ゼミナール/2023.12_GitHub/LiDAR-1/Python/data/txtdata/STG45_color.txt"
-embedded_output_path_location = "C:/Users/ryoi1/OneDrive/ドキュメント/B3/情報通信ゼミナール/2023.12_GitHub/LiDAR-1/Python/data/txtdata/STG45_point.txt"
-embedded_output_path_color = "C:/Users/ryoi1/OneDrive/ドキュメント/B3/情報通信ゼミナール/2023.12_GitHub/LiDAR-1/Python/data/txtdata/STG45_color.txt"
+quantized_output_path_location = "C:/dev/univ/Digital_Watermarking_3D/data/STG45_point.txt"
+quantized_output_path_color = "C:/dev/univ/Digital_Watermarking_3D/data/STG45_color.txt"
+embedded_output_path_location = "C:/dev/univ/Digital_Watermarking_3D/data/STG45_point.txt"
+embedded_output_path_color = "C:/dev/univ/Digital_Watermarking_3D/data/STG45_color.txt"
 
 ##################################### 0. 点群データを読み込む #######################################
 
@@ -44,9 +44,9 @@ o3d.visualization.draw_geometries([pcd_before])
 
 ################################## OP. 点群をオクツリー状態で表示 ####################################
 
-# max_depth = 10
-# print("元の点群をオクツリー状態で表示します")
-# STG45F.display_octree(pcd_before, max_depth)
+max_depth = 10
+print("元の点群をオクツリー状態で表示します")
+STG45F.display_octree(pcd_before, max_depth)
 
 ####################### 2. 文字列をバイナリに変換し、検査符号を追加 (埋め込みOP) ########################
 

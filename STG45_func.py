@@ -11,7 +11,6 @@ import random
 # from selfmade import comp
 import time
 import csv
-import pandas as pd
 import binascii
 from scipy.spatial import KDTree
 import string
