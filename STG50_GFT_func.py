@@ -86,7 +86,7 @@ def add_colors(pcd_before, color="grad"):
 
 def kmeans_cluster_points(xyz, num_clusters=None, seed=42):
     if num_clusters is None:
-        num_clusters = len(xyz) // 1000
+        num_clusters = len(xyz) // 4000
     kmeans = KMeans(n_clusters=num_clusters, random_state=seed)
     labels = kmeans.fit_predict(xyz)
     
@@ -104,7 +104,7 @@ def region_growing_cluster_points(
     xyz,
     distance_thresh=None,
     angle_thresh_deg=4.0,
-    min_cluster_size=100,
+    min_cluster_size=500,
     knn_normal=15,
     knn_region=15
 ):
@@ -180,7 +180,7 @@ def region_growing_cluster_points(
     return labels
 
 
-def ransac_cluster_points(xyz, distance_threshold=None, min_cluster_size=100, max_planes=1000):
+def ransac_cluster_points(xyz, distance_threshold=None, min_cluster_size=500, max_planes=1000):
     """
     RANSACによる平面クラスタ抽出（繰り返し）
 
@@ -233,7 +233,7 @@ def ransac_cluster_points(xyz, distance_threshold=None, min_cluster_size=100, ma
         print("[RANSAC] クラスタが検出されませんでした")
     return labels
 
-def split_large_clusters(xyz, labels, limit_points=2000, seed=42):
+def split_large_clusters(xyz, labels, limit_points=7000, seed=42):
     """
     指定したクラスタラベル群をもとに、点数が limit_points を超えるクラスタを再クラスタリングし、
     labels を更新して返す。

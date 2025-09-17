@@ -16,16 +16,16 @@ if __name__ == "__main__":
     error_correction = "none", "parity", "hamming" のいずれか
     """
     # 基礎
-    message_length = 20
+    message_length = 100
     beta = 1e-3
-    # 埋め込み容量アプローチ
-    split_mode = 0
     # 平面曲面アプローチ
     flatness_weighting = 1
     min_weight = 0
     max_weight = 2.0
+    # 埋め込み容量アプローチ
+    split_mode = 1
     # 誤り訂正符号アプローチ
-    error_correction = "parity"
+    error_correction = "none"
 
     # 1. 点群取得
     input_file = "C:/bun_zipper.ply"
@@ -40,8 +40,7 @@ if __name__ == "__main__":
     xyz = np.asarray(pcd_before.points)
     colors = np.asarray(pcd_before.colors)
     upper_cluster_num = int(len(pcd_before.points) / (message_length*8*2/3))
-    lower_cluster_num = int(len(pcd_before.points) / 2500)
-    print(f"望ましいクラスタ数: {lower_cluster_num} - {upper_cluster_num}")
+    print(f"望ましいクラスタ数: 8 - {upper_cluster_num}")
 
     # 3. 埋め込みビット生成
     watermark_message = STG50F.generate_random_string(message_length)
@@ -56,19 +55,19 @@ if __name__ == "__main__":
     # labels = STG50F.ransac_cluster_points(xyz)
     # labels = STG50F.split_large_clusters(xyz, labels, limit_points=3000)
 
-    # 5. 埋め込み
-    # xyz_after = STG50F.embed_watermark_xyz(
-    #     xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
-    #     flatness_weighting=flatness_weighting, k_neighbors=20, 
-    #     min_weight=min_weight, max_weight=max_weight
-    # )
-
-    # OP. 誤り訂正符号付加ver.埋め込み
-    xyz_after, checked_bit_length = STG50F.embed_watermark_xyz_check(
+    # 5(OP). 単多数決方式の埋め込み
+    xyz_after = STG50F.embed_watermark_xyz(
         xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
         flatness_weighting=flatness_weighting, k_neighbors=20, 
-        min_weight=min_weight, max_weight=max_weight, error_correction=error_correction
+        min_weight=min_weight, max_weight=max_weight
     )
+
+    # 5(OP). 2段階多数決方式の埋め込み
+    # xyz_after, checked_bit_length = STG50F.embed_watermark_xyz_check(
+    #     xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
+    #     flatness_weighting=flatness_weighting, k_neighbors=20, 
+    #     min_weight=min_weight, max_weight=max_weight, error_correction=error_correction
+    # )
 
     diffs = np.linalg.norm(xyz_after - xyz, axis=1)
     max_embed_shift = np.max(diffs)
@@ -84,16 +83,16 @@ if __name__ == "__main__":
     # xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
     # print(len(xyz_after))
 
-    # 6. 抽出
-    # extracted_bits = STG50F.extract_watermark_xyz(
-    #     xyz_after, xyz, labels, watermark_bits_length, split_mode=split_mode
-    # )
-
-    # OP. 誤り訂正符号付加ver.抽出
-    extracted_bits = STG50F.extract_watermark_xyz_check(
-        xyz_after, xyz, labels, watermark_bits_length, checked_bit_length,
-        split_mode=split_mode,  error_correction=error_correction
+    # 6(OP). 単多数決方式の抽出
+    extracted_bits = STG50F.extract_watermark_xyz(
+        xyz_after, xyz, labels, watermark_bits_length, split_mode=split_mode
     )
+
+    # 6(OP). 2段階多数決方式の抽出
+    # extracted_bits = STG50F.extract_watermark_xyz_check(
+    #     xyz_after, xyz, labels, watermark_bits_length, checked_bit_length,
+    #     split_mode=split_mode,  error_correction=error_correction
+    # )
 
     # 7. 評価
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
