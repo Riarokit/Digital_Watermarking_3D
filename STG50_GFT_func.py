@@ -443,14 +443,14 @@ def embed_watermark_xyz(
         if len(idx) <= skip_threshold:
                 continue  # 点数が少なすぎるクラスタはスキップ
         pts = xyz[idx]
+        W = build_graph(pts, k=6)
+        basis, eigvals = gft_basis(W)
         for channel in range(3):  # 0:x, 1:y, 2:z
             bits = embed_bits_per_channel[channel]
             bits_len = len(bits)
             if bits_len == 0:
                 continue  # このチャネルには何も埋め込まない
             signal = pts[:, channel]
-            W = build_graph(pts, k=6)
-            basis, eigvals = gft_basis(W)
             gft_coeffs = gft(signal, basis)
             Q_ = len(gft_coeffs)
             q_start = int(Q_ * min_spectre)
@@ -516,33 +516,38 @@ def extract_watermark_xyz(
         return extracted_bits
 
     elif split_mode == 1:
-        skip_threshold = embed_bits_length/5
+        skip_threshold = embed_bits_length / 5
         split_sizes = [len(arr) for arr in np.array_split(np.zeros(embed_bits_length), 3)]
-        channel_bits_lists = [[] for _ in range(3)]
 
-        for channel in range(3):
-            bits_len = split_sizes[channel]
-            if bits_len == 0:
+        # チャネルごとのbit_listsを初期化（クラスタループの外に1つだけ作っておく）
+        channel_bit_lists = [
+            [[] for _ in range(split_sizes[0])],  # x
+            [[] for _ in range(split_sizes[1])],  # y
+            [[] for _ in range(split_sizes[2])]   # z
+        ]
+
+        for c in np.unique(labels):
+            idx = np.where(labels == c)[0]
+            if len(idx) <= skip_threshold:
                 continue
-            bit_lists = [[] for _ in range(bits_len)]
 
-            for c in np.unique(labels):
-                idx = np.where(labels == c)[0]
-                if len(idx) <= skip_threshold:
+            pts_emb = xyz_emb[idx]
+            pts_orig = xyz_orig[idx]
+            if len(pts_emb) != len(pts_orig):
+                continue  # 点数不一致クラスタはスキップ
+
+            actual_k = min(6, len(idx) - 1)
+            W = build_graph(pts_orig, k=actual_k)
+            basis, eigvals = gft_basis(W)
+            Q_ = len(basis)
+            q_start = int(Q_ * min_spectre)
+            q_end = int(Q_ * max_spectre)
+            Q_extract = q_end - q_start
+
+            for channel in range(3):  # 0:x, 1:y, 2:z
+                bits_len = split_sizes[channel]
+                if bits_len == 0:
                     continue
-
-                pts_emb = xyz_emb[idx]
-                pts_orig = xyz_orig[idx]
-                if len(pts_emb) != len(pts_orig):
-                    continue  # 点数不一致クラスタはスキップ
-
-                actual_k = min(6, len(idx) - 1)
-                W = build_graph(pts_orig, k=actual_k)
-                basis, eigvals = gft_basis(W)
-                Q_ = len(basis)
-                q_start = int(Q_ * min_spectre)
-                q_end   = int(Q_ * max_spectre)
-                Q_extract = q_end - q_start
                 n_repeat = Q_extract // bits_len if bits_len > 0 else 1
 
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
@@ -554,21 +559,25 @@ def extract_watermark_xyz(
                         if i < Q_extract:
                             diff = gft_coeffs_emb[q_start + i] - gft_coeffs_orig[q_start + i]
                             bit = 1 if diff > 0 else 0
-                            bit_lists[bit_idx].append(bit)
+                            channel_bit_lists[channel][bit_idx].append(bit)
+
                 for i in range(n_repeat * bits_len, Q_extract):
                     bit_idx = i % bits_len
                     diff = gft_coeffs_emb[q_start + i] - gft_coeffs_orig[q_start + i]
                     bit = 1 if diff > 0 else 0
-                    bit_lists[bit_idx].append(bit)
+                    channel_bit_lists[channel][bit_idx].append(bit)
 
-            extracted_bits_channel = []
+        # 各チャネルのビットを多数決で確定
+        extracted_bits_channel = []
+        for bit_lists in channel_bit_lists:
+            extracted = []
             for bits in bit_lists:
                 counts = {0: bits.count(0), 1: bits.count(1)}
-                extracted_bit = 1 if counts[1] > counts[0] else 0
-                extracted_bits_channel.append(extracted_bit)
-            channel_bits_lists[channel] = extracted_bits_channel
+                bit = 1 if counts[1] > counts[0] else 0
+                extracted.append(bit)
+            extracted_bits_channel.extend(extracted)
 
-        extracted_bits = np.concatenate(channel_bits_lists).astype(int).tolist()
+        extracted_bits = np.array(extracted_bits_channel).astype(int).tolist()
         return extracted_bits
 
     else:
