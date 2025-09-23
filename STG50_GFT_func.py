@@ -406,13 +406,14 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
 def embed_watermark_xyz(
     xyz, labels, embed_bits, beta=0.01,
     split_mode=0, flatness_weighting=0, k_neighbors=20, 
-    min_weight=0, max_weight=2.0, embed_spectre=1.0
+    min_weight=0, max_weight=2.0,
+    min_spectre=0.0, max_spectre=1.0
 ):
     """
     各クラスタでembed_bitsを
       - split_mode=0: 3チャネル全てに同じ情報（冗長化）
       - split_mode=1: 3分割してx/y/zにそれぞれ独立情報
-    としてGFT低周波embed_spectre分だけ埋め込む
+    としてGFT係数のmin_spectre - max_spectre分の周波数帯域にだけ埋め込む
     """
     xyz_after = xyz.copy()
     cluster_ids = np.unique(labels)
@@ -452,19 +453,22 @@ def embed_watermark_xyz(
             basis, eigvals = gft_basis(W)
             gft_coeffs = gft(signal, basis)
             Q_ = len(gft_coeffs)
-            Q_embed = int(Q_ * embed_spectre)
+            q_start = int(Q_ * min_spectre)
+            q_end   = int(Q_ * max_spectre)
+            Q_embed = q_end - q_start
             n_repeat = Q_embed // bits_len if bits_len > 0 else 1
             redundant_bits = repeat_bits_blockwise(bits, n_repeat, Q_embed)
             for i in range(Q_embed):
                 w = redundant_bits[i] * 2 - 1
-                gft_coeffs[i] += w * beta * weights[c] * phi
+                gft_coeffs[q_start + i] += w * beta * weights[c] * phi
             embed_signal = igft(gft_coeffs, basis)
             xyz_after[idx, channel] = embed_signal
     return xyz_after
 
 
 def extract_watermark_xyz(
-    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_spectre=1.0
+    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0,
+    min_spectre=0.0, max_spectre=1.0
 ):
     if split_mode == 0:
         skip_threshold = embed_bits_length/2
@@ -483,7 +487,9 @@ def extract_watermark_xyz(
             W = build_graph(pts_orig, k=actual_k)
             basis, eigvals = gft_basis(W)
             Q_ = len(basis)
-            Q_extract = int(Q_ * embed_spectre)
+            q_start = int(Q_ * min_spectre)
+            q_end   = int(Q_ * max_spectre)
+            Q_extract = q_end - q_start
             n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
 
             for channel in range(3):
@@ -493,12 +499,12 @@ def extract_watermark_xyz(
                     for rep in range(n_repeat):
                         i = bit_idx * n_repeat + rep
                         if i < Q_extract:
-                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            diff = gft_coeffs_emb[q_start + i] - gft_coeffs_orig[q_start + i]
                             bit = 1 if diff > 0 else 0
                             bit_lists[bit_idx].append(bit)
                 for i in range(n_repeat * embed_bits_length, Q_extract):
                     bit_idx = i % embed_bits_length
-                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                    diff = gft_coeffs_emb[q_start + i] - gft_coeffs_orig[q_start + i]
                     bit = 1 if diff > 0 else 0
                     bit_lists[bit_idx].append(bit)
 
@@ -534,7 +540,9 @@ def extract_watermark_xyz(
                 W = build_graph(pts_orig, k=actual_k)
                 basis, eigvals = gft_basis(W)
                 Q_ = len(basis)
-                Q_extract = int(Q_ * embed_spectre)
+                q_start = int(Q_ * min_spectre)
+                q_end   = int(Q_ * max_spectre)
+                Q_extract = q_end - q_start
                 n_repeat = Q_extract // bits_len if bits_len > 0 else 1
 
                 gft_coeffs_emb = gft(pts_emb[:, channel], basis)
@@ -544,12 +552,12 @@ def extract_watermark_xyz(
                     for rep in range(n_repeat):
                         i = bit_idx * n_repeat + rep
                         if i < Q_extract:
-                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            diff = gft_coeffs_emb[q_start + i] - gft_coeffs_orig[q_start + i]
                             bit = 1 if diff > 0 else 0
                             bit_lists[bit_idx].append(bit)
                 for i in range(n_repeat * bits_len, Q_extract):
                     bit_idx = i % bits_len
-                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                    diff = gft_coeffs_emb[q_start + i] - gft_coeffs_orig[q_start + i]
                     bit = 1 if diff > 0 else 0
                     bit_lists[bit_idx].append(bit)
 

@@ -29,7 +29,9 @@ if __name__ == "__main__":
     max_weight = 2.0
     # 埋め込み容量アプローチ
     split_mode = 1
-    # 
+    # 周波数帯域アプローチ
+    min_spectre = 0.5
+    max_spectre = 1.0
 
     # 1. 点群取得
     input_file = "C:/bun_zipper.ply"
@@ -63,7 +65,8 @@ if __name__ == "__main__":
     xyz_after = STG50F.embed_watermark_xyz(
         xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
         flatness_weighting=flatness_weighting, k_neighbors=20, 
-        min_weight=min_weight, max_weight=max_weight
+        min_weight=min_weight, max_weight=max_weight,
+        min_spectre=min_spectre, max_spectre=max_spectre
     )
 
     diffs = np.linalg.norm(xyz_after - xyz, axis=1)
@@ -82,7 +85,8 @@ if __name__ == "__main__":
 
     # 6. 単多数決方式の抽出
     extracted_bits = STG50F.extract_watermark_xyz(
-        xyz_after, xyz, labels, watermark_bits_length, split_mode=split_mode
+        xyz_after, xyz, labels, watermark_bits_length, split_mode=split_mode,
+        min_spectre=min_spectre, max_spectre=max_spectre
     )
 
     # 7. 評価
