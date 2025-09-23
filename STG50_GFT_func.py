@@ -401,6 +401,177 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
         rep = rep[:total_length]
     return rep
 
+
+### 関数間違い注意！！
+def embed_watermark_xyz(
+    xyz, labels, embed_bits, beta=0.01,
+    split_mode=0, flatness_weighting=0, k_neighbors=20, 
+    min_weight=0, max_weight=2.0, embed_spectre=1.0
+):
+    """
+    各クラスタでembed_bitsを
+      - split_mode=0: 3チャネル全てに同じ情報（冗長化）
+      - split_mode=1: 3分割してx/y/zにそれぞれ独立情報
+    としてGFT低周波embed_spectre分だけ埋め込む
+    """
+    xyz_after = xyz.copy()
+    cluster_ids = np.unique(labels)
+    # color_list = visualize_clusters(xyz, labels)
+    flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
+    weights = compute_cluster_weights(flatness_dict, min_weight, max_weight, flatness_weighting)
+    phi = max(
+        np.min(xyz[:, 0]) + np.max(xyz[:, 0]),
+        np.min(xyz[:, 1]) + np.max(xyz[:, 1]),
+        np.min(xyz[:, 2]) + np.max(xyz[:, 2])
+    )
+
+    # --- ビット列の用意 ---
+    if split_mode == 0:
+        # 全チャネル同じ情報
+        embed_bits_per_channel = [embed_bits] * 3
+        skip_threshold = len(embed_bits)/2
+    elif split_mode == 1:
+        # 3チャネルで異なる情報（3分割）
+        embed_bits_per_channel = np.array_split(embed_bits, 3)
+        skip_threshold = len(embed_bits)/5
+    else:
+        raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
+
+    for c in cluster_ids:
+        idx = np.where(labels == c)[0]
+        if len(idx) <= skip_threshold:
+                continue  # 点数が少なすぎるクラスタはスキップ
+        pts = xyz[idx]
+        for channel in range(3):  # 0:x, 1:y, 2:z
+            bits = embed_bits_per_channel[channel]
+            bits_len = len(bits)
+            if bits_len == 0:
+                continue  # このチャネルには何も埋め込まない
+            signal = pts[:, channel]
+            W = build_graph(pts, k=6)
+            basis, eigvals = gft_basis(W)
+            gft_coeffs = gft(signal, basis)
+            Q_ = len(gft_coeffs)
+            Q_embed = int(Q_ * embed_spectre)
+            n_repeat = Q_embed // bits_len if bits_len > 0 else 1
+            redundant_bits = repeat_bits_blockwise(bits, n_repeat, Q_embed)
+            for i in range(Q_embed):
+                w = redundant_bits[i] * 2 - 1
+                gft_coeffs[i] += w * beta * weights[c] * phi
+            embed_signal = igft(gft_coeffs, basis)
+            xyz_after[idx, channel] = embed_signal
+    return xyz_after
+
+
+def extract_watermark_xyz(
+    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_spectre=1.0
+):
+    if split_mode == 0:
+        skip_threshold = embed_bits_length/2
+        bit_lists = [[] for _ in range(embed_bits_length)]
+        for c in np.unique(labels):
+            idx = np.where(labels == c)[0]
+            if len(idx) <= skip_threshold:
+                continue  # 点数が少なすぎるクラスタはスキップ
+
+            pts_emb = xyz_emb[idx]
+            pts_orig = xyz_orig[idx]
+            if len(pts_emb) != len(pts_orig):
+                continue  # 点数不一致クラスタはスキップ
+
+            actual_k = min(6, len(idx) - 1)
+            W = build_graph(pts_orig, k=actual_k)
+            basis, eigvals = gft_basis(W)
+            Q_ = len(basis)
+            Q_extract = int(Q_ * embed_spectre)
+            n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
+
+            for channel in range(3):
+                gft_coeffs_emb = gft(pts_emb[:, channel], basis)
+                gft_coeffs_orig = gft(pts_orig[:, channel], basis)
+                for bit_idx in range(embed_bits_length):
+                    for rep in range(n_repeat):
+                        i = bit_idx * n_repeat + rep
+                        if i < Q_extract:
+                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            bit = 1 if diff > 0 else 0
+                            bit_lists[bit_idx].append(bit)
+                for i in range(n_repeat * embed_bits_length, Q_extract):
+                    bit_idx = i % embed_bits_length
+                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                    bit = 1 if diff > 0 else 0
+                    bit_lists[bit_idx].append(bit)
+
+        extracted_bits = []
+        for bits in bit_lists:
+            counts = {0: bits.count(0), 1: bits.count(1)}
+            extracted_bit = 1 if counts[1] > counts[0] else 0
+            extracted_bits.append(extracted_bit)
+        return extracted_bits
+
+    elif split_mode == 1:
+        skip_threshold = embed_bits_length/5
+        split_sizes = [len(arr) for arr in np.array_split(np.zeros(embed_bits_length), 3)]
+        channel_bits_lists = [[] for _ in range(3)]
+
+        for channel in range(3):
+            bits_len = split_sizes[channel]
+            if bits_len == 0:
+                continue
+            bit_lists = [[] for _ in range(bits_len)]
+
+            for c in np.unique(labels):
+                idx = np.where(labels == c)[0]
+                if len(idx) <= skip_threshold:
+                    continue
+
+                pts_emb = xyz_emb[idx]
+                pts_orig = xyz_orig[idx]
+                if len(pts_emb) != len(pts_orig):
+                    continue  # 点数不一致クラスタはスキップ
+
+                actual_k = min(6, len(idx) - 1)
+                W = build_graph(pts_orig, k=actual_k)
+                basis, eigvals = gft_basis(W)
+                Q_ = len(basis)
+                Q_extract = int(Q_ * embed_spectre)
+                n_repeat = Q_extract // bits_len if bits_len > 0 else 1
+
+                gft_coeffs_emb = gft(pts_emb[:, channel], basis)
+                gft_coeffs_orig = gft(pts_orig[:, channel], basis)
+
+                for bit_idx in range(bits_len):
+                    for rep in range(n_repeat):
+                        i = bit_idx * n_repeat + rep
+                        if i < Q_extract:
+                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                            bit = 1 if diff > 0 else 0
+                            bit_lists[bit_idx].append(bit)
+                for i in range(n_repeat * bits_len, Q_extract):
+                    bit_idx = i % bits_len
+                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
+                    bit = 1 if diff > 0 else 0
+                    bit_lists[bit_idx].append(bit)
+
+            extracted_bits_channel = []
+            for bits in bit_lists:
+                counts = {0: bits.count(0), 1: bits.count(1)}
+                extracted_bit = 1 if counts[1] > counts[0] else 0
+                extracted_bits_channel.append(extracted_bit)
+            channel_bits_lists[channel] = extracted_bits_channel
+
+        extracted_bits = np.concatenate(channel_bits_lists).astype(int).tolist()
+        return extracted_bits
+
+    else:
+        raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
+
+
+
+
+
+
+### 関数間違い注意！！
 def embed_watermark_xyz_check(
     xyz, labels, watermark_bits, beta=0.01,
     split_mode=0, flatness_weighting=0, k_neighbors=20,
@@ -958,166 +1129,3 @@ def greedy_cluster_points(xyz, num_clusters=8, seed=42):
             cluster_labels[next_idx] = c
             unassigned.remove(next_idx)
     return cluster_labels
-
-def embed_watermark_xyz(
-    xyz, labels, embed_bits, beta=0.01,
-    split_mode=0, flatness_weighting=0, k_neighbors=20, 
-    min_weight=0, max_weight=2.0, embed_spectre=1.0
-):
-    """
-    各クラスタでembed_bitsを
-      - split_mode=0: 3チャネル全てに同じ情報（冗長化）
-      - split_mode=1: 3分割してx/y/zにそれぞれ独立情報
-    としてGFT低周波embed_spectre分だけ埋め込む
-    """
-    xyz_after = xyz.copy()
-    cluster_ids = np.unique(labels)
-    # color_list = visualize_clusters(xyz, labels)
-    flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
-    weights = compute_cluster_weights(flatness_dict, min_weight, max_weight, flatness_weighting)
-    phi = max(
-        np.min(xyz[:, 0]) + np.max(xyz[:, 0]),
-        np.min(xyz[:, 1]) + np.max(xyz[:, 1]),
-        np.min(xyz[:, 2]) + np.max(xyz[:, 2])
-    )
-
-    # --- ビット列の用意 ---
-    if split_mode == 0:
-        # 全チャネル同じ情報
-        embed_bits_per_channel = [embed_bits] * 3
-        skip_threshold = len(embed_bits)/2
-    elif split_mode == 1:
-        # 3チャネルで異なる情報（3分割）
-        embed_bits_per_channel = np.array_split(embed_bits, 3)
-        skip_threshold = len(embed_bits)/5
-    else:
-        raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
-
-    for c in cluster_ids:
-        idx = np.where(labels == c)[0]
-        if len(idx) <= skip_threshold:
-                continue  # 点数が少なすぎるクラスタはスキップ
-        pts = xyz[idx]
-        for channel in range(3):  # 0:x, 1:y, 2:z
-            bits = embed_bits_per_channel[channel]
-            bits_len = len(bits)
-            if bits_len == 0:
-                continue  # このチャネルには何も埋め込まない
-            signal = pts[:, channel]
-            W = build_graph(pts, k=6)
-            basis, eigvals = gft_basis(W)
-            gft_coeffs = gft(signal, basis)
-            Q_ = len(gft_coeffs)
-            Q_embed = int(Q_ * embed_spectre)
-            n_repeat = Q_embed // bits_len if bits_len > 0 else 1
-            redundant_bits = repeat_bits_blockwise(bits, n_repeat, Q_embed)
-            for i in range(Q_embed):
-                w = redundant_bits[i] * 2 - 1
-                gft_coeffs[i] += w * beta * weights[c] * phi
-            embed_signal = igft(gft_coeffs, basis)
-            xyz_after[idx, channel] = embed_signal
-    return xyz_after
-
-
-def extract_watermark_xyz(
-    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0, embed_spectre=1.0
-):
-    if split_mode == 0:
-        skip_threshold = embed_bits_length/2
-        bit_lists = [[] for _ in range(embed_bits_length)]
-        for c in np.unique(labels):
-            idx = np.where(labels == c)[0]
-            if len(idx) <= skip_threshold:
-                continue  # 点数が少なすぎるクラスタはスキップ
-
-            pts_emb = xyz_emb[idx]
-            pts_orig = xyz_orig[idx]
-            if len(pts_emb) != len(pts_orig):
-                continue  # 点数不一致クラスタはスキップ
-
-            actual_k = min(6, len(idx) - 1)
-            W = build_graph(pts_orig, k=actual_k)
-            basis, eigvals = gft_basis(W)
-            Q_ = len(basis)
-            Q_extract = int(Q_ * embed_spectre)
-            n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
-
-            for channel in range(3):
-                gft_coeffs_emb = gft(pts_emb[:, channel], basis)
-                gft_coeffs_orig = gft(pts_orig[:, channel], basis)
-                for bit_idx in range(embed_bits_length):
-                    for rep in range(n_repeat):
-                        i = bit_idx * n_repeat + rep
-                        if i < Q_extract:
-                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                            bit = 1 if diff > 0 else 0
-                            bit_lists[bit_idx].append(bit)
-                for i in range(n_repeat * embed_bits_length, Q_extract):
-                    bit_idx = i % embed_bits_length
-                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                    bit = 1 if diff > 0 else 0
-                    bit_lists[bit_idx].append(bit)
-
-        extracted_bits = []
-        for bits in bit_lists:
-            counts = {0: bits.count(0), 1: bits.count(1)}
-            extracted_bit = 1 if counts[1] > counts[0] else 0
-            extracted_bits.append(extracted_bit)
-        return extracted_bits
-
-    elif split_mode == 1:
-        skip_threshold = embed_bits_length/5
-        split_sizes = [len(arr) for arr in np.array_split(np.zeros(embed_bits_length), 3)]
-        channel_bits_lists = [[] for _ in range(3)]
-
-        for channel in range(3):
-            bits_len = split_sizes[channel]
-            if bits_len == 0:
-                continue
-            bit_lists = [[] for _ in range(bits_len)]
-
-            for c in np.unique(labels):
-                idx = np.where(labels == c)[0]
-                if len(idx) <= skip_threshold:
-                    continue
-
-                pts_emb = xyz_emb[idx]
-                pts_orig = xyz_orig[idx]
-                if len(pts_emb) != len(pts_orig):
-                    continue  # 点数不一致クラスタはスキップ
-
-                actual_k = min(6, len(idx) - 1)
-                W = build_graph(pts_orig, k=actual_k)
-                basis, eigvals = gft_basis(W)
-                Q_ = len(basis)
-                Q_extract = int(Q_ * embed_spectre)
-                n_repeat = Q_extract // bits_len if bits_len > 0 else 1
-
-                gft_coeffs_emb = gft(pts_emb[:, channel], basis)
-                gft_coeffs_orig = gft(pts_orig[:, channel], basis)
-
-                for bit_idx in range(bits_len):
-                    for rep in range(n_repeat):
-                        i = bit_idx * n_repeat + rep
-                        if i < Q_extract:
-                            diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                            bit = 1 if diff > 0 else 0
-                            bit_lists[bit_idx].append(bit)
-                for i in range(n_repeat * bits_len, Q_extract):
-                    bit_idx = i % bits_len
-                    diff = gft_coeffs_emb[i] - gft_coeffs_orig[i]
-                    bit = 1 if diff > 0 else 0
-                    bit_lists[bit_idx].append(bit)
-
-            extracted_bits_channel = []
-            for bits in bit_lists:
-                counts = {0: bits.count(0), 1: bits.count(1)}
-                extracted_bit = 1 if counts[1] > counts[0] else 0
-                extracted_bits_channel.append(extracted_bit)
-            channel_bits_lists[channel] = extracted_bits_channel
-
-        extracted_bits = np.concatenate(channel_bits_lists).astype(int).tolist()
-        return extracted_bits
-
-    else:
-        raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")

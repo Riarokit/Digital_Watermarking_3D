@@ -5,15 +5,22 @@ import time
 
 if __name__ == "__main__":
     """
-    各パラメータ設定
+    main関数概要:
+    点群をクラスタリングし、各クラスタの座標を信号としてGFTを行う。
+    各クラスタのGFT係数にビット列を埋め込み、1クラスタから復元した冗長ビットのみでまず多数決。
+    その後、そのビット列の検査符号をチェックし、通過したビット列のみ同ビットで再び多数決。
 
-    message_length = 埋め込む文字列の長さ
-    num_clusters = クラスタ数
-    beta = 調整係数
-    split_mode = 0:チャネル間に同一の埋め込み, 1:チャネル間に異なる埋め込み
-    flatness_weighting = 0:なし, 1:平面部重み, 2:曲面部重み
+    使用変数説明:
+    message_length         = 埋め込む文字列の長さ
+    num_clusters           = クラスタ数
+    beta                   = 調整係数
+    split_mode             = 0:チャネル間に同一の埋め込み, 1:チャネル間に異なる埋め込み
+    flatness_weighting     = 0:なし, 1:平面部重み, 2:曲面部重み
     min_weight, max_weight = 最小・最大重み係数 (平均1になるようにする)
-    error_correction = "none", "parity", "hamming" のいずれか
+    error_correction       = "none", "parity", "hamming" のいずれか
+
+    オプション設定:
+    OP: 切り取りやノイズ付加などのオプション手順
     """
     # 基礎
     message_length = 100
@@ -55,19 +62,12 @@ if __name__ == "__main__":
     # labels = STG50F.ransac_cluster_points(xyz)
     # labels = STG50F.split_large_clusters(xyz, labels, limit_points=3000)
 
-    # 5(OP). 単多数決方式の埋め込み
-    xyz_after = STG50F.embed_watermark_xyz(
+    # 5. 2段階多数決方式の埋め込み
+    xyz_after, checked_bit_length = STG50F.embed_watermark_xyz_check(
         xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
         flatness_weighting=flatness_weighting, k_neighbors=20, 
-        min_weight=min_weight, max_weight=max_weight
+        min_weight=min_weight, max_weight=max_weight, error_correction=error_correction
     )
-
-    # 5(OP). 2段階多数決方式の埋め込み
-    # xyz_after, checked_bit_length = STG50F.embed_watermark_xyz_check(
-    #     xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
-    #     flatness_weighting=flatness_weighting, k_neighbors=20, 
-    #     min_weight=min_weight, max_weight=max_weight, error_correction=error_correction
-    # )
 
     diffs = np.linalg.norm(xyz_after - xyz, axis=1)
     max_embed_shift = np.max(diffs)
@@ -83,16 +83,11 @@ if __name__ == "__main__":
     # xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
     # print(len(xyz_after))
 
-    # 6(OP). 単多数決方式の抽出
-    extracted_bits = STG50F.extract_watermark_xyz(
-        xyz_after, xyz, labels, watermark_bits_length, split_mode=split_mode
+    # 6. 2段階多数決方式の抽出
+    extracted_bits = STG50F.extract_watermark_xyz_check(
+        xyz_after, xyz, labels, watermark_bits_length, checked_bit_length,
+        split_mode=split_mode,  error_correction=error_correction
     )
-
-    # 6(OP). 2段階多数決方式の抽出
-    # extracted_bits = STG50F.extract_watermark_xyz_check(
-    #     xyz_after, xyz, labels, watermark_bits_length, checked_bit_length,
-    #     split_mode=split_mode,  error_correction=error_correction
-    # )
 
     # 7. 評価
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
