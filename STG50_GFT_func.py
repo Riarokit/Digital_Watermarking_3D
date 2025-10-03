@@ -327,32 +327,66 @@ def estimate_cluster_flatness(xyz, labels, k_neighbors=20):
         cluster_flatness[c] = np.mean(curvatures)
     return cluster_flatness
 
-def compute_cluster_weights(flatness_dict, min_weight=0.2, max_weight=1.8, flatness_weighting=0):
+def compute_cluster_weights(flatness_dict, min_weight=0.0, max_weight=2.0, flatness_weighting=0):
     """
     flatness_weighting:
       0 → 重みなし（全クラスタ重み1.0）
-      1 → 平坦クラスタほど重み大
-      2 → 曲面クラスタほど重み大
+      1 → 平坦クラスタほど重み大（傾斜）
+      2 → 曲面クラスタほど重み大（傾斜）
+      3 → 平坦クラスタ上位半分をmax_weight、下位半分をmin_weight
+      4 → 曲面クラスタ上位半分をmax_weight、下位半分をmin_weight
     """
     if flatness_weighting == 0:
         # 重みなし
         return {c: 1.0 for c in flatness_dict.keys()}
 
     vals = np.array(list(flatness_dict.values()))
+    clusters = list(flatness_dict.keys())
     min_f, max_f = np.min(vals), np.max(vals)
+    
     if max_f == min_f:
         # 曲率全て同じ時は全クラスタ重み1.0
         return {c: 1.0 for c in flatness_dict.keys()}
+    
     if flatness_weighting == 1:
-        # 平坦度が大きいほど重み大（平坦部優遇）
+        # 平坦度が大きいほど重み大（平坦部優遇、傾斜）
         norm = (vals - min_f) / (max_f - min_f)
+        scaled = min_weight + (max_weight - min_weight) * norm
+        weights = {c: w for c, w in zip(clusters, scaled)}
     elif flatness_weighting == 2:
-        # 平坦度が小さいほど重み大（曲面部優遇）
+        # 平坦度が小さいほど重み大（曲面部優遇、傾斜）
         norm = (max_f - vals) / (max_f - min_f)
+        scaled = min_weight + (max_weight - min_weight) * norm
+        weights = {c: w for c, w in zip(clusters, scaled)}
+    elif flatness_weighting == 3:
+        # 平坦クラスタ上位半分をmax_weight、下位半分をmin_weight
+        # 平坦度の値でソート（大きい方が平坦）
+        sorted_indices = np.argsort(vals)[::-1]  # 降順ソート
+        n_clusters = len(clusters)
+        half = n_clusters // 2
+        weights = {}
+        for i, idx in enumerate(sorted_indices):
+            cluster_id = clusters[idx]
+            if i < half:
+                weights[cluster_id] = max_weight  # 上位半分
+            else:
+                weights[cluster_id] = min_weight  # 下位半分
+    elif flatness_weighting == 4:
+        # 曲面クラスタ上位半分をmax_weight、下位半分をmin_weight
+        # 平坦度の値でソート（小さい方が曲面）
+        sorted_indices = np.argsort(vals)  # 昇順ソート
+        n_clusters = len(clusters)
+        half = n_clusters // 2
+        weights = {}
+        for i, idx in enumerate(sorted_indices):
+            cluster_id = clusters[idx]
+            if i < half:
+                weights[cluster_id] = max_weight  # 上位半分（曲面度が高い）
+            else:
+                weights[cluster_id] = min_weight  # 下位半分
     else:
-        raise ValueError("flatness_weightingは0（重みなし）, 1（平坦優遇）, 2（曲面優遇）で指定")
-    scaled = min_weight + (max_weight - min_weight) * norm
-    weights = {c: w for c, w in zip(flatness_dict.keys(), scaled)}
+        raise ValueError("flatness_weightingは0（重みなし）, 1（平坦優遇傾斜）, 2（曲面優遇傾斜）, 3（平坦二分）, 4（曲面二分）で指定")
+    
     return weights
 
 

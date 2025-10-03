@@ -22,15 +22,15 @@ if __name__ == "__main__":
     """
     # 基礎
     message_length = 100
-    beta = 1e-3
+    beta = 1.2e-3
     # 平面曲面アプローチ
-    flatness_weighting = 1
+    flatness_weighting = 3
     min_weight = 0
     max_weight = 2.0
     # 埋め込み容量アプローチ
     split_mode = 1
     # 周波数帯域アプローチ
-    min_spectre = 0.5
+    min_spectre = 0.0
     max_spectre = 1.0
 
     # 1. 点群取得
@@ -74,7 +74,7 @@ if __name__ == "__main__":
     print("最大埋め込み誤差:", max_embed_shift)
 
     # OP. ノイズ攻撃
-    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.005, mode='uniform', seed=42)
+    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.01, mode='uniform', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
