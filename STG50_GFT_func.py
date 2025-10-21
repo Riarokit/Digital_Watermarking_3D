@@ -8,6 +8,7 @@ from scipy.spatial import cKDTree
 from concurrent.futures import ProcessPoolExecutor
 from sklearn.neighbors import NearestNeighbors
 import zlib
+from PIL import Image
 # import cupy as cp
 
 def generate_random_string(length):
@@ -50,6 +51,27 @@ def binary_to_string(extracted_binary_list):
             chars.append('?')  # デコード不可な場合は?にする
     return ''.join(chars)
 
+def image_to_bitarray(image_path, n=32):
+    """
+    画像ファイルをn×nの2値ビット配列に変換
+    """
+    img = Image.open(image_path).convert('L')  # グレースケール
+    img = img.resize((n, n), Image.LANCZOS)
+    arr = np.array(img)
+    # しきい値で2値化
+    arr = (arr > 127).astype(np.uint8)
+    return arr.flatten().tolist()  # 1次元ビットリスト
+
+
+def bitarray_to_image(bitarray, n=32, save_path=None):
+    """
+    1次元ビット配列をn×n画像に復元
+    """
+    arr = np.array(bitarray, dtype=np.uint8).reshape((n, n)) * 255
+    img = Image.fromarray(arr, mode='L')
+    if save_path:
+        img.save(save_path)
+    return img
 
 def add_colors(pcd_before, color="grad"):
     """
@@ -990,44 +1012,82 @@ def hamming74_decode(bits):
 
 def calc_psnr_xyz(pcd_before, pcd_after, reverse=False):
     """
-    最近傍点対応で点群PSNRを計算する（order-free）
+    最近傍点対応で点群PSNR, RMSE, SNRを計算する（order-free）
     - pcd_before, pcd_after: open3d.geometry.PointCloud
-    - max_range: PSNRの分母に使うスケール（未指定なら点群全体の最大距離幅）
     - reverse: Trueならafter→beforeも評価し、両方向平均
     """
     points_before = np.asarray(pcd_before.points)
     points_after = np.asarray(pcd_after.points)
-    
-    # before→after最近傍
+
+    # 最近傍検索（before → after）
     tree = cKDTree(points_after)
-    dists, _ = tree.query(points_before, k=1)
-    mse_fwd = np.mean(dists ** 2)
+    dists, idxs = tree.query(points_before, k=1)
+    matched_after = points_after[idxs]
+    
+    # MSE（forward）
+    mse_fwd = np.mean(np.sum((points_before - matched_after) ** 2, axis=1))
     
     if reverse:
-        # after→beforeも計算して平均
         tree_rev = cKDTree(points_before)
-        dists_rev, _ = tree_rev.query(points_after, k=1)
-        mse_rev = np.mean(dists_rev ** 2)
+        dists_rev, idxs_rev = tree_rev.query(points_after, k=1)
+        matched_before = points_before[idxs_rev]
+        mse_rev = np.mean(np.sum((points_after - matched_before) ** 2, axis=1))
         mse = (mse_fwd + mse_rev) / 2
     else:
         mse = mse_fwd
 
-    # スケール計算
-    xyz = np.asarray(pcd_before.points)
+    # max_range（PSNR用スケール）
+    xyz = points_before
     max_range = max(
-            np.max(xyz[:,0]) - np.min(xyz[:,0]),
-            np.max(xyz[:,1]) - np.min(xyz[:,1]),
-            np.max(xyz[:,2]) - np.min(xyz[:,2])
-        )
-    if mse == 0:
-        psnr = float('inf')
-    else:
-        psnr = 10 * np.log10((max_range ** 2) / mse)
-    
+        np.max(xyz[:,0]) - np.min(xyz[:,0]),
+        np.max(xyz[:,1]) - np.min(xyz[:,1]),
+        np.max(xyz[:,2]) - np.min(xyz[:,2])
+    )
+
+    # PSNR
+    psnr = float('inf') if mse == 0 else 10 * np.log10((max_range ** 2) / mse)
+
+    # RMSE（√MSE）
+    rmse = np.sqrt(mse)
+
+    # SNR（式14に基づく）
+    signal_power = np.mean(np.sum(points_before ** 2, axis=1))
+    snr = float('inf') if mse == 0 else 10 * np.log10(signal_power / mse)
+
+    # 出力
     print("------------------- 評価 -------------------")
-    print(f"MSE: {mse:.6f}")
-    print(f"PSNR: {psnr:.2f} dB (max_range={max_range:.4f})")
-    return psnr
+    print(f"MSE  : {mse:.6f}")
+    print(f"RMSE : {rmse:.6f}")
+    print(f"PSNR : {psnr:.2f} dB (max_range={max_range:.4f})")
+    print(f"SNR  : {snr:.2f} dB")
+
+def evaluate_watermark(watermark_bits, extracted_bits):
+    """
+    透かし画像の埋め込み前後のCorr（相関係数）とBER（ビット誤り率）を計算し表示する。
+    """
+
+    # numpy配列に変換
+    w = np.array(watermark_bits, dtype=float)
+    w_ = np.array(extracted_bits, dtype=float)
+
+    # 0/1形式を±1に変換
+    if set(np.unique(w)) <= {0, 1}:
+        w = 2 * w - 1
+    if set(np.unique(w_)) <= {0, 1}:
+        w_ = 2 * w_ - 1
+
+    # --- Corr計算 ---
+    numerator = np.sum(w * w_)
+    denominator = np.sqrt(np.sum(w**2) * np.sum(w_**2))
+    corr = numerator / denominator if denominator != 0 else 0.0
+    corr = (corr + 1) / 2  # Corrを0〜1にスケーリング
+
+    # --- BER計算 ---
+    ber = 1.0000-np.mean(np.array(watermark_bits) == np.array(extracted_bits))
+
+    # --- 結果を表示 ---
+    print(f"Corr : {corr:.4f}")
+    print(f"BER  : {ber:.4f}")
 
 def add_noise(xyz, noise_percent=0.01, mode='uniform', seed=None, verbose=True):
     """

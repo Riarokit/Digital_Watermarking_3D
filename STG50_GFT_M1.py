@@ -21,10 +21,10 @@ if __name__ == "__main__":
     OP: 切り取りやノイズ付加などのオプション手順
     """
     # 基礎
-    message_length = 100
+    n = 16  # 画像サイズn×n
     beta = 1.2e-3
     # 平面曲面アプローチ
-    flatness_weighting = 3
+    flatness_weighting = 0
     min_weight = 0
     max_weight = 2.0
     # 埋め込み容量アプローチ
@@ -33,7 +33,8 @@ if __name__ == "__main__":
     min_spectre = 0.0
     max_spectre = 1.0
 
-    # 1. 点群取得
+    # 1. データ取得
+    image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
     input_file = "C:/bun_zipper.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
@@ -45,13 +46,11 @@ if __name__ == "__main__":
     # o3d.visualization.draw_geometries([pcd_before])
     xyz = np.asarray(pcd_before.points)
     colors = np.asarray(pcd_before.colors)
-    upper_cluster_num = int(len(pcd_before.points) / (message_length*8*2/3))
-    print(f"望ましいクラスタ数: 8 - {upper_cluster_num}")
 
     # 3. 埋め込みビット生成
-    watermark_message = STG50F.generate_random_string(message_length)
-    watermark_bits = STG50F.string_to_binary(watermark_message)
+    watermark_bits = STG50F.image_to_bitarray(image_path, n=n)
     watermark_bits_length = len(watermark_bits)
+    print(f"埋込ビット数：{watermark_bits_length} (画像: {n}x{n})")
     pcd_after = o3d.geometry.PointCloud() # 埋め込み後の点群基盤
 
     # 4. クラスタリング
@@ -74,7 +73,7 @@ if __name__ == "__main__":
     print("最大埋め込み誤差:", max_embed_shift)
 
     # OP. ノイズ攻撃
-    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.01, mode='uniform', seed=42)
+    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.05, mode='gaussian', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
@@ -93,16 +92,13 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    psnr = STG50F.calc_psnr_xyz(pcd_before, pcd_after)
+    STG50F.calc_psnr_xyz(pcd_before, pcd_after)
 
     # 8. 確認用
     o3d.visualization.draw_geometries([pcd_after])
-    ber = 1.0000-np.mean(np.array(watermark_bits) == np.array(extracted_bits))
-    extracted_message = STG50F.binary_to_string(extracted_bits)
-    all_time = time.time() - start
-    print(f"埋込文字列：{watermark_message}")
-    print(f"抽出文字列：{extracted_message}")
     print(f"埋込ビット：{len(watermark_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
-    print(f"BER: {ber:.4f}")
+    STG50F.evaluate_watermark(watermark_bits, extracted_bits)
+    STG50F.bitarray_to_image(extracted_bits, n=n, save_path="recovered.bmp")
+    all_time = time.time() - start
     print(f"実行時間: {all_time:.2f}秒\n")
