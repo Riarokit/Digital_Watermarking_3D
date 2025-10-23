@@ -1010,31 +1010,55 @@ def hamming74_decode(bits):
 
 ######################################## 評価用 ##########################################################
 
-def calc_psnr_xyz(pcd_before, pcd_after, reverse=False):
+def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=True):
     """
-    最近傍点対応で点群PSNR, RMSE, SNRを計算する（order-free）
+    点群の評価指標を計算します。
     - pcd_before, pcd_after: open3d.geometry.PointCloud
     - reverse: Trueならafter→beforeも評価し、両方向平均
+    - by_index: True の場合、点配列のインデックスを直接対応させて評価します。
+                （点数と順序が一致している必要があります）
+              False の場合は既存の最近傍対応（order-free）で評価します。
+    - verbose: True で結果を print します。
+
+    戻り値: dict { 'mse':..., 'rmse':..., 'psnr':..., 'snr':..., 'max_range':..., 'method': 'index'|'nn' }
     """
     points_before = np.asarray(pcd_before.points)
     points_after = np.asarray(pcd_after.points)
 
-    # 最近傍検索（before → after）
-    tree = cKDTree(points_after)
-    dists, idxs = tree.query(points_before, k=1)
-    matched_after = points_after[idxs]
-    
-    # MSE（forward）
-    mse_fwd = np.mean(np.sum((points_before - matched_after) ** 2, axis=1))
-    
-    if reverse:
-        tree_rev = cKDTree(points_before)
-        dists_rev, idxs_rev = tree_rev.query(points_after, k=1)
-        matched_before = points_before[idxs_rev]
-        mse_rev = np.mean(np.sum((points_after - matched_before) ** 2, axis=1))
-        mse = (mse_fwd + mse_rev) / 2
+    if by_index:
+        # インデックス対応モード: 点数と並びが同じであることを要求
+        if points_before.shape != points_after.shape:
+            raise ValueError("by_index=True の場合、pcd_before と pcd_after は同じ点数・形状である必要があります")
+
+        # そのまま差を計算
+        diffs_sq = np.sum((points_before - points_after) ** 2, axis=1)
+        mse_fwd = np.mean(diffs_sq)
+        method = 'index'
+
+        if reverse:
+            # reverse を index モードでも意味があるように、after->before の差を同様に計算して平均
+            diffs_rev_sq = np.sum((points_after - points_before) ** 2, axis=1)
+            mse_rev = np.mean(diffs_rev_sq)
+            mse = (mse_fwd + mse_rev) / 2
+        else:
+            mse = mse_fwd
+
     else:
-        mse = mse_fwd
+        # 既存の最近傍対応（order-free）
+        tree = cKDTree(points_after)
+        dists, idxs = tree.query(points_before, k=1)
+        matched_after = points_after[idxs]
+        mse_fwd = np.mean(np.sum((points_before - matched_after) ** 2, axis=1))
+
+        if reverse:
+            tree_rev = cKDTree(points_before)
+            dists_rev, idxs_rev = tree_rev.query(points_after, k=1)
+            matched_before = points_before[idxs_rev]
+            mse_rev = np.mean(np.sum((points_after - matched_before) ** 2, axis=1))
+            mse = (mse_fwd + mse_rev) / 2
+        else:
+            mse = mse_fwd
+        method = 'nn'
 
     # max_range（PSNR用スケール）
     xyz = points_before
@@ -1050,16 +1074,28 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False):
     # RMSE（√MSE）
     rmse = np.sqrt(mse)
 
-    # SNR（式14に基づく）
+    # SNR
     signal_power = np.mean(np.sum(points_before ** 2, axis=1))
     snr = float('inf') if mse == 0 else 10 * np.log10(signal_power / mse)
 
-    # 出力
-    print("------------------- 評価 -------------------")
-    print(f"MSE  : {mse:.6f}")
-    print(f"RMSE : {rmse:.6f}")
-    print(f"PSNR : {psnr:.2f} dB (max_range={max_range:.4f})")
-    print(f"SNR  : {snr:.2f} dB")
+    results = {
+        'mse': float(mse),
+        'rmse': float(rmse),
+        'psnr': float(psnr) if np.isfinite(psnr) else float('inf'),
+        'snr': float(snr) if np.isfinite(snr) else float('inf'),
+        'max_range': float(max_range),
+        'method': method
+    }
+
+    if verbose:
+        print("------------------- 評価 -------------------")
+        print(f"method: {method}")
+        print(f"MSE  : {results['mse']:.6f}")
+        print(f"RMSE : {results['rmse']:.6f}")
+        print(f"PSNR : {results['psnr']:.2f} dB (max_range={results['max_range']:.4f})")
+        print(f"SNR  : {results['snr']:.2f} dB")
+
+    return results
 
 def evaluate_watermark(watermark_bits, extracted_bits):
     """

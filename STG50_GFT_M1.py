@@ -73,7 +73,7 @@ if __name__ == "__main__":
     print("最大埋め込み誤差:", max_embed_shift)
 
     # OP. ノイズ攻撃
-    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.05, mode='gaussian', seed=42)
+    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.02, mode='gaussian', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    STG50F.calc_psnr_xyz(pcd_before, pcd_after)
+    STG50F.calc_psnr_xyz(pcd_before, pcd_after, by_index=True)
 
     # 8. 確認用
     o3d.visualization.draw_geometries([pcd_after])
