@@ -1029,7 +1029,6 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
         # そのまま差を計算
         diffs_sq = np.sum((points_before - points_after) ** 2, axis=1)
         mse_fwd = np.mean(diffs_sq)
-        method = 'index'
 
         if reverse:
             # reverse を index モードでも意味があるように、after->before の差を同様に計算して平均
@@ -1054,7 +1053,6 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
             mse = (mse_fwd + mse_rev) / 2
         else:
             mse = mse_fwd
-        method = 'nn'
 
     # max_range（PSNR用スケール）
     xyz = points_before
@@ -1080,12 +1078,10 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
         'psnr': float(psnr) if np.isfinite(psnr) else float('inf'),
         'snr': float(snr) if np.isfinite(snr) else float('inf'),
         'max_range': float(max_range),
-        'method': method
     }
 
     if verbose:
         print("------------------- 評価 -------------------")
-        print(f"method: {method}")
         print(f"MSE  : {results['mse']:.6f}")
         print(f"RMSE : {results['rmse']:.6f}")
         print(f"PSNR : {results['psnr']:.2f} dB (max_range={results['max_range']:.4f})")
