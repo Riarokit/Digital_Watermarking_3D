@@ -16,7 +16,6 @@ if __name__ == "__main__":
     beta                   = 調整係数
     split_mode             = 0:チャネル間に同一の埋め込み, 1:チャネル間に異なる埋め込み
     flatness_weighting     = 0:なし, 1:平面部重み, 2:曲面部重み
-    min_weight, max_weight = 最小・最大重み係数 (平均1になるようにする)
     error_correction       = "none", "parity", "hamming" のいずれか
 
     オプション設定:
@@ -27,8 +26,6 @@ if __name__ == "__main__":
     beta = 1e-3
     # 平面曲面アプローチ
     flatness_weighting = 1
-    min_weight = 0
-    max_weight = 2.0
     # 埋め込み容量アプローチ
     split_mode = 1
     # 誤り訂正符号アプローチ
@@ -65,7 +62,7 @@ if __name__ == "__main__":
     xyz_after, checked_bit_length = STG50F.embed_watermark_xyz_check(
         xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
         flatness_weighting=flatness_weighting, k_neighbors=20, 
-        min_weight=min_weight, max_weight=max_weight, error_correction=error_correction
+        error_correction=error_correction
     )
 
     diffs = np.linalg.norm(xyz_after - xyz, axis=1)

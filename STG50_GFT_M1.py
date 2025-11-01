@@ -22,11 +22,9 @@ if __name__ == "__main__":
     """
     # 基礎
     n = 16  # 画像サイズn×n
-    beta = 1.2e-3
+    beta = 1e-3
     # 平面曲面アプローチ
-    flatness_weighting = 0
-    min_weight = 0
-    max_weight = 2.0
+    flatness_weighting = 2
     # 埋め込み容量アプローチ
     split_mode = 1
     # 周波数帯域アプローチ
@@ -64,7 +62,6 @@ if __name__ == "__main__":
     xyz_after = STG50F.embed_watermark_xyz(
         xyz, labels, watermark_bits, beta=beta, split_mode=split_mode,
         flatness_weighting=flatness_weighting, k_neighbors=20, 
-        min_weight=min_weight, max_weight=max_weight,
         min_spectre=min_spectre, max_spectre=max_spectre
     )
 
@@ -73,7 +70,7 @@ if __name__ == "__main__":
     print("最大埋め込み誤差:", max_embed_shift)
 
     # OP. ノイズ攻撃
-    xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.02, mode='gaussian', seed=42)
+    # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.03, mode='gaussian', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
