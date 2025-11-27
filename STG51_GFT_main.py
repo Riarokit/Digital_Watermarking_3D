@@ -4,30 +4,30 @@ import STG51_GFT_func as STG51F
 import time
 
 if __name__ == "__main__":
-    # ==========================================
-    # 定数設定 (これらが「共通ルール」となる)
-    # ==========================================
-    GRID_SIZE = 3.5       # ボクセルサイズ L (点群のスケールに合わせて調整が必要)
-    GUARD_BAND = 0.15     # ガードバンド幅 epsilon (Lの5-10%程度推奨)
-    QIM_DELTA = 0.05      # QIMステップ幅 (埋め込み強度)
-    
-    # 周波数帯域設定 (低周波のみ利用)
-    MIN_SPECTRE = 0.0
-    MAX_SPECTRE = 0.3     # 低周波30%のみ使用
-    
-    # 画像設定
+    # 定数設定
+    GRID_SIZE = 25.0       # ボクセルサイズ L
+    GUARD_BAND = 0.2       # ガードバンド幅 epsilon
+    QIM_DELTA = 0.01     # QIMステップ幅 (埋め込み強度)
+    # グラフ構築設定
+    GRAPH_METHOD = 'knn'; GRAPH_PARAM = 8    # k近傍法
+    # GRAPH_METHOD = 'radius'; GRAPH_PARAM = 5 # 半径探索
+    # 周波数帯域設定
+    MIN_SPECTRE = 0.02
+    MAX_SPECTRE = 0.8
+    # インプットファイルの設定
     IMG_SIZE = 16
-    IMAGE_PATH = "watermark64.bmp" # 任意の画像
-    INPUT_FILE = "C:/bun_zipper.ply" # 点群ファイルパス
+    IMAGE_PATH = "watermark16.bmp" # 画像
+    INPUT_FILE = "C:/bun_zipper.ply" # 点群
 
     # 1. データ読み込み
     print(f"Reading {INPUT_FILE}...")
     pcd_before = o3d.io.read_point_cloud(INPUT_FILE)
-    xyz_orig = np.asarray(pcd_before.points)
-    scale = np.max(xyz_orig, axis=0) - np.min(xyz_orig, axis=0)
-    print(f"Point Cloud Scale: {scale}")
-    # 補足: GRID_SIZEはモデルの大きさに対して適切に設定する必要あり
-    # モデル幅が100なら、GRID_SIZE=10.0 (10分割) くらいが目安
+    pcd_before = STG51F.add_colors(pcd_before, color="grad")
+    pcd_before, xyz_orig = STG51F.normalize_point_cloud(
+        pcd_before, 
+        target_scale=100.0,
+        visualize=False
+    )
     
     # 2. 透かし画像の準備
     watermark_bits = STG51F.image_to_bitarray(IMAGE_PATH, n=IMG_SIZE)
@@ -40,13 +40,18 @@ if __name__ == "__main__":
     labels = STG51F.voxel_grid_clustering(
         xyz_orig, 
         grid_size=GRID_SIZE, 
-        guard_band=GUARD_BAND
+        guard_band=GUARD_BAND,
+        visualize=False
     )
     
     # 4. 埋め込み (QIM)
     print("\n--- Embedding ---")
     xyz_embedded = STG51F.embed_watermark_qim(
         xyz_orig, labels, watermark_bits,
+        grid_size=GRID_SIZE,   # チェック用
+        guard_band=GUARD_BAND, # チェック用
+        graph_method=GRAPH_METHOD, # グラフ設定
+        graph_param=GRAPH_PARAM,   # グラフ設定
         delta=QIM_DELTA,
         min_spectre=MIN_SPECTRE,
         max_spectre=MAX_SPECTRE
@@ -57,14 +62,16 @@ if __name__ == "__main__":
     # 5. 埋め込み誤差評価
     pcd_embedded = o3d.geometry.PointCloud()
     pcd_embedded.points = o3d.utility.Vector3dVector(xyz_embedded)
+    o3d.visualization.draw_geometries([pcd_embedded], window_name="Embedded")
     STG51F.calc_psnr_xyz(pcd_before, pcd_embedded)
 
     # 6. ノイズ攻撃
-    print("\n--- Attacks ---")
-    # ガードバンド幅 (0.15) より小さい移動量ならクラスタは維持されるはず
-    xyz_embedded = STG51F.add_noise(xyz_embedded, noise_std=0.02)
+    # print("\n--- Noise Attack ---")
+    # xyz_embedded = STG51F.add_noise(xyz_embedded, noise_std=0.02)
+    # print(f"noize ratio: {noise_std * 100}%")
 
     # 7. 切り取り攻撃
+    # print("\n--- Crop Attack ---")
     # xyz_embedded = STG51F.crop_point_cloud(xyz_embedded, keep_ratio=0.6)
     # print(f"xyz_embedded Points: {len(xyz_embedded)}")
 
@@ -79,6 +86,8 @@ if __name__ == "__main__":
     # B. QIM復号
     extracted_bits = STG51F.extract_watermark_qim(
         xyz_embedded, labels_extracted, len(watermark_bits),
+        graph_method=GRAPH_METHOD, # グラフ設定
+        graph_param=GRAPH_PARAM,   # グラフ設定
         delta=QIM_DELTA,
         min_spectre=MIN_SPECTRE,
         max_spectre=MAX_SPECTRE
