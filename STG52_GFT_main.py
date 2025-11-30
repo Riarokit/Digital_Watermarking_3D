@@ -3,6 +3,11 @@ import open3d as o3d
 import STG52_GFT_func as STG52F
 import time
 
+"""
+ボクセルグリッド分割し、各ボクセル内の点群の重心を信号としてGFTを行う手法 (VGSP)
+しかし、埋め込みにより点がボクセルの境界線を超えると、元のグラフでなくなるため攻撃耐性が弱すぎる。
+"""
+
 if __name__ == "__main__":
     # 定数設定
     GRID_SIZE = 4.0        # ボクセルサイズ
@@ -46,20 +51,19 @@ if __name__ == "__main__":
     # 4.誤差評価
     pcd_embedded = o3d.geometry.PointCloud()
     pcd_embedded.points = o3d.utility.Vector3dVector(xyz_embedded)
+    pcd_embedded.colors = pcd_before.colors
     o3d.visualization.draw_geometries([pcd_embedded], window_name="Embedded")
-    STG52F.calc_psnr_xyz(pcd_before, pcd_embedded)
+    STG52F.calc_psnr(pcd_before, pcd_embedded)
     
-    # 5. ノイズ攻撃
+    # OP. ノイズ攻撃
     # print("\n--- Noise Attack ---")
-    # xyz_embedded = STG52F.add_noise(xyz_embedded, noise_std=0.01)
-    # print(f"noize ratio: {noise_std * 100}%")
+    # xyz_embedded = STG52F.noise_addition_attack(xyz_embedded, noise_percent=0.001)
 
-    # 6. 切り取り攻撃
-    # print("\n--- Crop Attack ---")
-    # xyz_embedded = STG52F.crop_point_cloud(xyz_embedded, keep_ratio=0.6)
-    # print(f"xyz_embedded Points: {len(xyz_embedded)}")
+    # OP. 切り取り攻撃
+    print("\n--- Crop Attack ---")
+    xyz_embedded = STG52F.cropping_attack(xyz_embedded, keep_ratio=0.9)
     
-    # 7. 抽出
+    # 5. 抽出
     print("\n--- Extraction ---")
     extracted_bits = STG52F.extract_watermark_vgsp(
         xyz_embedded, len(watermark_bits),
@@ -70,8 +74,8 @@ if __name__ == "__main__":
         max_spectre=MAX_SPECTRE
     )
     
-    # 8. 評価
-    STG52F.evaluate_watermark(watermark_bits, extracted_bits)
+    # 6. 評価
+    STG52F.calc_ber(watermark_bits, extracted_bits)
     STG52F.bitarray_to_image(extracted_bits, n=IMG_SIZE, save_path="recovered_vgsp.bmp")
     
     # 可視化

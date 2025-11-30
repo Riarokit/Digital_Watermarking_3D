@@ -380,23 +380,104 @@ def extract_watermark_vgsp(
             
     return extracted_bits
 
+# ==========================================
 # 評価関数
-def calc_psnr_xyz(pcd_before, pcd_after):
+# ==========================================
+
+def calc_psnr(pcd_before, pcd_after):
     points_before = np.asarray(pcd_before.points)
     points_after = np.asarray(pcd_after.points)
+    
+    # MSE (平均二乗誤差) の計算
     tree = cKDTree(points_after)
     dists, _ = tree.query(points_before, k=1)
     mse = np.mean(dists ** 2)
+    
+    # PSNR (ピーク信号対雑音比) の計算
+    # 基準: 点群のバウンディングボックスの最大幅 (Max Range)
     xyz = points_before
     max_range = np.max(np.max(xyz,0)-np.min(xyz,0))
     psnr = 10 * np.log10((max_range ** 2) / mse) if mse > 0 else float('inf')
-    print(f"[Metric] MSE: {mse:.6f}, PSNR: {psnr:.2f} dB")
-    return psnr
+    
+    # SNR (信号対雑音比) の計算
+    # 基準: 信号(座標値)そのもののパワー (原点からの距離の二乗平均)
+    signal_power = np.mean(np.sum(points_before ** 2, axis=1))
+    snr = 10 * np.log10(signal_power / mse) if mse > 0 else float('inf')
+    
+    print(f"[Metric] MSE: {mse:.6f}")
+    print(f"[Metric] PSNR: {psnr:.2f} dB")
+    print(f"[Metric] SNR:  {snr:.2f} dB")
+    
+    return psnr, snr
 
-def evaluate_watermark(original_bits, extracted_bits):
+def calc_ber(original_bits, extracted_bits):
     ber = np.mean(np.array(original_bits) != np.array(extracted_bits))
     print(f"[Metric] BER: {ber:.4f}")
     return ber
 
-def add_noise(xyz, noise_std=0.001):
-    return xyz + np.random.normal(0, noise_std, xyz.shape)
+# ==========================================
+# 攻撃関数
+# ==========================================
+
+def noise_addition_attack(xyz, noise_percent=0.01, mode='uniform', seed=None, verbose=True):
+    """
+    numpy配列(xyz)にノイズを加える
+    - noise_percent: ノイズ振幅（座標値最大幅の割合, 例: 0.01 = 1%）
+    - mode: 'uniform'または'gaussian'
+    - return: ノイズ加算後のnumpy配列
+    """
+    rng = np.random.RandomState(seed)
+    xyz_min = xyz.min(axis=0)
+    xyz_max = xyz.max(axis=0)
+    ranges = xyz_max - xyz_min
+    scale = ranges * noise_percent
+    if verbose:
+        print(f"ノイズ振幅: {noise_percent*100:.2f}% (scale={scale})")
+    if mode == 'uniform':
+        noise = rng.uniform(low=-scale, high=scale, size=xyz.shape)
+    elif mode == 'gaussian':
+        noise = rng.normal(loc=0.0, scale=scale/2, size=xyz.shape)
+    else:
+        raise ValueError('modeは "uniform" か "gaussian"')
+    xyz_noisy = xyz + noise
+    return xyz_noisy
+
+def cropping_attack(xyz_after, keep_ratio=0.5, mode='center'):
+    """
+    xyz_after に対して切り取り攻撃を行い、一部の点群のみを残し、表示する。
+
+    Parameters:
+    - xyz_after (np.ndarray): 埋め込み後の点群座標（N×3）
+    - keep_ratio (float): 残す点の割合（0.0～1.0]
+    - mode (str): 'center'（中心部を残す）または 'edge'（端部を残す）
+    - verbose (bool): 情報表示の有無
+
+    Returns:
+    - xyz_cropped (np.ndarray): 切り取り後の点群座標
+    """
+    import open3d as o3d
+    assert 0.0 < keep_ratio <= 1.0, "keep_ratioは (0, 1] で指定してください"
+    N = xyz_after.shape[0]
+    keep_n = int(N * keep_ratio)
+
+    center = np.mean(xyz_after, axis=0)
+    dists = np.linalg.norm(xyz_after - center, axis=1)
+
+    if mode == 'center':
+        keep_indices = np.argsort(dists)[:keep_n]
+    elif mode == 'edge':
+        keep_indices = np.argsort(dists)[-keep_n:]
+    else:
+        raise ValueError("modeは 'center' または 'edge' を指定してください")
+
+    xyz_cropped = xyz_after[keep_indices]
+
+    print(f"切り取り攻撃 ({mode}): 元点数={N} → 残点数={keep_n} ({keep_ratio*100:.1f}%)")
+
+    # 可視化
+    cropped_pcd = o3d.geometry.PointCloud()
+    cropped_pcd.points = o3d.utility.Vector3dVector(xyz_cropped)
+    cropped_pcd.paint_uniform_color([1, 0.6, 0])  # オレンジ系で表示
+    o3d.visualization.draw_geometries([cropped_pcd], window_name="Cropped Point Cloud")
+
+    return xyz_cropped
