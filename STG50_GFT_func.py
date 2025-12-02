@@ -108,7 +108,7 @@ def add_colors(pcd_before, color="grad"):
 
 def kmeans_cluster_points(xyz, num_clusters=None, seed=42):
     if num_clusters is None:
-        num_clusters = len(xyz) // 4000
+        num_clusters = len(xyz) // 2000
     kmeans = KMeans(n_clusters=num_clusters, random_state=seed)
     labels = kmeans.fit_predict(xyz)
     
@@ -255,7 +255,7 @@ def ransac_cluster_points(xyz, distance_threshold=None, min_cluster_size=500, ma
         print("[RANSAC] クラスタが検出されませんでした")
     return labels
 
-def split_large_clusters(xyz, labels, limit_points=7000, seed=42):
+def split_large_clusters(xyz, labels, limit_points=3000, seed=42):
     """
     指定したクラスタラベル群をもとに、点数が limit_points を超えるクラスタを再クラスタリングし、
     labels を更新して返す。

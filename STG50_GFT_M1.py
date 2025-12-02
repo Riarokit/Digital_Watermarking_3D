@@ -24,15 +24,15 @@ if __name__ == "__main__":
     n = 16  # 画像サイズn×n
     beta = 1e-3
     # 平面曲面アプローチ
-    flatness_weighting = 1
+    flatness_weighting = 0
     # 埋め込み容量アプローチ
     split_mode = 1
     # 周波数帯域アプローチ
-    min_spectre = 0.0
+    min_spectre = 0.83
     max_spectre = 1.0
 
     # 1. データ取得
-    image_path = "watermark64.bmp"  # 埋め込みたい画像ファイル
+    image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
     input_file = "C:/bun_zipper.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
