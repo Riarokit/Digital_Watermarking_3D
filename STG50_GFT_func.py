@@ -9,7 +9,12 @@ from concurrent.futures import ProcessPoolExecutor
 from sklearn.neighbors import NearestNeighbors
 import zlib
 from PIL import Image
+import copy
 # import cupy as cp
+
+# =========================================================
+#  前処理関数群
+# =========================================================
 
 def generate_random_string(length):
     """
@@ -106,6 +111,39 @@ def add_colors(pcd_before, color="grad"):
     pcd_before.colors = o3d.utility.Vector3dVector(colors)
     return pcd_before
 
+def normalize_point_cloud(pcd):
+    points = np.asarray(pcd.points)
+    max_bound_before = pcd.get_max_bound()
+    min_bound_before = pcd.get_min_bound()
+    np.set_printoptions(precision=4, suppress=True)
+    print(f"[Normalize] Before: {min_bound_before} ~ {max_bound_before}")
+
+    # 1. 重心を原点へ移動 (Translation)
+    centroid = np.mean(points, axis=0)
+    points = points - centroid
+
+    # 2. 原点からの最大距離でスケーリング (Uniform Scaling)
+    # 各点の原点からの距離を計算
+    distances = np.linalg.norm(points, axis=1)
+    max_distance = np.max(distances)
+
+    # 最大距離が0（点が1つしかない等）でなければ割る
+    if max_distance > 0:
+        points = points / max_distance
+
+    # 結果を書き戻す
+    pcd.points = o3d.utility.Vector3dVector(points)
+    
+    max_bound_after = pcd.get_max_bound()
+    min_bound_after = pcd.get_min_bound()
+    print(f"[Normalize]  After: {min_bound_after} ~ {max_bound_after}")
+    
+    return pcd
+
+# =========================================================
+#  クラスタリング関数群
+# =========================================================
+
 def kmeans_cluster_points(xyz, num_clusters=None, seed=42):
     if num_clusters is None:
         num_clusters = len(xyz) // 2000
@@ -120,7 +158,6 @@ def kmeans_cluster_points(xyz, num_clusters=None, seed=42):
     print(f"[KMeans] 最も点数が少ないクラスタの点数: {min_count}")
     
     return labels
-
 
 def region_growing_cluster_points(
     xyz,
@@ -200,7 +237,6 @@ def region_growing_cluster_points(
     else:
         print("[RegionGrowing] 有効なクラスタがありません")
     return labels
-
 
 def ransac_cluster_points(xyz, distance_threshold=None, min_cluster_size=500, max_planes=1000):
     """
@@ -409,6 +445,9 @@ def compute_cluster_weights(flatness_dict, flatness_weighting=0):
     
     return weights
 
+# =========================================================
+#  グラフ構築・埋め込み・抽出関数群
+# =========================================================
 
 def build_graph(xyz, k=6):
     adj = kneighbors_graph(xyz, k, mode='distance', include_self=False) # k最近傍グラフ構築
@@ -474,9 +513,9 @@ def embed_watermark_xyz(
     flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
     weights = compute_cluster_weights(flatness_dict, flatness_weighting)
     phi = max(
-        np.min(xyz[:, 0]) + np.max(xyz[:, 0]),
-        np.min(xyz[:, 1]) + np.max(xyz[:, 1]),
-        np.min(xyz[:, 2]) + np.max(xyz[:, 2])
+        np.max(xyz[:, 0]) - np.min(xyz[:, 0]),
+        np.max(xyz[:, 1]) - np.min(xyz[:, 1]),
+        np.max(xyz[:, 2]) - np.min(xyz[:, 2])
     )
 
     # --- ビット列の用意 ---
@@ -517,7 +556,6 @@ def embed_watermark_xyz(
             embed_signal = igft(gft_coeffs, basis)
             xyz_after[idx, channel] = embed_signal
     return xyz_after
-
 
 def extract_watermark_xyz(
     xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0,
@@ -638,9 +676,6 @@ def extract_watermark_xyz(
 
 
 
-
-
-
 ### 関数間違い注意！！
 def embed_watermark_xyz_check(
     xyz, labels, watermark_bits, beta=0.01,
@@ -721,7 +756,6 @@ def embed_watermark_xyz_check(
             xyz_after[idx, channel] = embed_signal
 
     return xyz_after, checked_bits_length
-
 
 def extract_watermark_xyz_check(
     xyz_emb, xyz_orig, labels, watermark_bits_length, checked_bits_length,
@@ -926,7 +960,10 @@ def extract_watermark_xyz_check(
     else:
         raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
 
-    
+# =========================================================
+#  誤り訂正関数群
+# =========================================================
+
 def add_parity_code(bits, block_size=8):
     """
     偶数パリティ符号をブロックごとに追加
@@ -1004,9 +1041,11 @@ def hamming74_decode(bits):
         decoded.extend(block[:4])
     return decoded
 
-######################################## 評価用 ##########################################################
+# =========================================================
+#  評価関数群
+# =========================================================
 
-def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=True):
+def evaluate_imperceptibility(pcd_before, pcd_after, reverse=False, by_index=False):
     """
     点群の評価指標を計算します。
     - pcd_before, pcd_after: open3d.geometry.PointCloud
@@ -1014,7 +1053,6 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
     - by_index: True の場合、点配列のインデックスを直接対応させて評価します。
                 （点数と順序が一致している必要があります）
               False の場合は既存の最近傍対応（order-free）で評価します。
-    - verbose: True で結果を print します。
 
     戻り値: dict { 'mse':..., 'rmse':..., 'psnr':..., 'snr':..., 'max_range':..., 'method': 'index'|'nn' }
     """
@@ -1028,6 +1066,7 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
 
         # そのまま差を計算
         diffs_sq = np.sum((points_before - points_after) ** 2, axis=1)
+        sum_sq_diff = np.sum(diffs_sq)
         mse_fwd = np.mean(diffs_sq)
 
         if reverse:
@@ -1043,7 +1082,10 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
         tree = cKDTree(points_after)
         dists, idxs = tree.query(points_before, k=1)
         matched_after = points_after[idxs]
-        mse_fwd = np.mean(np.sum((points_before - matched_after) ** 2, axis=1))
+        
+        diffs_sq = np.sum((points_before - matched_after) ** 2, axis=1)
+        sum_sq_diff = np.sum(diffs_sq)
+        mse_fwd = np.mean(diffs_sq)
 
         if reverse:
             tree_rev = cKDTree(points_before)
@@ -1054,6 +1096,11 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
         else:
             mse = mse_fwd
 
+    sum_sq_signal = np.sum(points_before ** 2)
+    if sum_sq_diff == 0:
+        snr_ratio = float('inf')
+    else:
+        snr_ratio = sum_sq_signal / sum_sq_diff
     # max_range（PSNR用スケール）
     xyz = points_before
     max_range = max(
@@ -1061,66 +1108,55 @@ def calc_psnr_xyz(pcd_before, pcd_after, reverse=False, by_index=False, verbose=
         np.max(xyz[:,1]) - np.min(xyz[:,1]),
         np.max(xyz[:,2]) - np.min(xyz[:,2])
     )
-
+    # RMSE（√MSE）
+    rmse = np.sqrt(mse)
+    # SNR
+    snr = 10 * np.log10(snr_ratio) if snr_ratio != float('inf') else float('inf')
+    # VSNR
+    vsnr = 20 * np.log10(snr_ratio) if snr_ratio != float('inf') else float('inf')
     # PSNR
     psnr = float('inf') if mse == 0 else 10 * np.log10((max_range ** 2) / mse)
 
-    # RMSE（√MSE）
-    rmse = np.sqrt(mse)
+    print("------------------- 評価 -------------------")
+    print(f"MSE  : {mse:.6f}")
+    print(f"RMSE : {rmse:.6f}")
+    print(f"SNR  : {snr:.2f} dB")
+    print(f"PSNR : {psnr:.2f} dB (max_range={max_range:.4f})")
+    print(f"VSNR : {vsnr:.2f} dB")
 
-    # SNR
-    signal_power = np.mean(np.sum(points_before ** 2, axis=1))
-    snr = float('inf') if mse == 0 else 10 * np.log10(signal_power / mse)
-
-    results = {
-        'mse': float(mse),
-        'rmse': float(rmse),
-        'psnr': float(psnr) if np.isfinite(psnr) else float('inf'),
-        'snr': float(snr) if np.isfinite(snr) else float('inf'),
-        'max_range': float(max_range),
-    }
-
-    if verbose:
-        print("------------------- 評価 -------------------")
-        print(f"MSE  : {results['mse']:.6f}")
-        print(f"RMSE : {results['rmse']:.6f}")
-        print(f"PSNR : {results['psnr']:.2f} dB (max_range={results['max_range']:.4f})")
-        print(f"SNR  : {results['snr']:.2f} dB")
-
-    return results
-
-def evaluate_watermark(watermark_bits, extracted_bits):
+def evaluate_robustness(watermark_bits, extracted_bits):
     """
-    透かし画像の埋め込み前後のCorr（相関係数）とBER（ビット誤り率）を計算し表示する。
+    Corr（ピアソン相関係数）とBER（ビット誤り率）を計算し表示する。
     """
-
+    
     # numpy配列に変換
     w = np.array(watermark_bits, dtype=float)
     w_ = np.array(extracted_bits, dtype=float)
 
-    # 0/1形式を±1に変換
-    if set(np.unique(w)) <= {0, 1}:
-        w = 2 * w - 1
-    if set(np.unique(w_)) <= {0, 1}:
-        w_ = 2 * w_ - 1
-
-    # --- Corr計算 ---
-    numerator = np.sum(w * w_)
-    denominator = np.sqrt(np.sum(w**2) * np.sum(w_**2))
-    corr = numerator / denominator if denominator != 0 else 0.0
-    corr = (corr + 1) / 2  # Corrを0〜1にスケーリング
-
     # --- BER計算 ---
-    ber = 1.0000-np.mean(np.array(watermark_bits) == np.array(extracted_bits))
+    # 単純な一致率から計算
+    ber = 1.0 - np.mean(w == w_)
+
+    # --- Corr計算 (論文の式5: ピアソン相関係数) ---
+    # np.corrcoef は相関行列を返すので [0, 1] 成分を取得
+    # 入力が定数（分散0）だとNaNになるので注意が必要だが、透かしビットなら通常大丈夫
+    if np.std(w) == 0 or np.std(w_) == 0:
+        corr = 0.0
+    else:
+        corr = np.corrcoef(w, w_)[0, 1]
 
     # --- 結果を表示 ---
     print(f"Corr : {corr:.4f}")
     print(f"BER  : {ber:.4f}")
 
-def add_noise(xyz, noise_percent=0.01, mode='uniform', seed=None, verbose=True):
+# =========================================================
+#  攻撃関数群
+# =========================================================
+
+def noise_addition_attack(xyz, noise_percent=1.0, mode='uniform', seed=None):
     """
     numpy配列(xyz)にノイズを加える
-    - noise_percent: ノイズ振幅（座標値最大幅の割合, 例: 0.01 = 1%）
+    - noise_percent: ノイズ振幅
     - mode: 'uniform'または'gaussian'
     - return: ノイズ加算後のnumpy配列
     """
@@ -1128,9 +1164,8 @@ def add_noise(xyz, noise_percent=0.01, mode='uniform', seed=None, verbose=True):
     xyz_min = xyz.min(axis=0)
     xyz_max = xyz.max(axis=0)
     ranges = xyz_max - xyz_min
-    scale = ranges * noise_percent
-    if verbose:
-        print(f"ノイズ振幅: {noise_percent*100:.2f}% (scale={scale})")
+    scale = ranges * noise_percent / 100
+    print(f"[Attack] ノイズ振幅: {noise_percent:.2f}% (scale={scale})")
     if mode == 'uniform':
         noise = rng.uniform(low=-scale, high=scale, size=xyz.shape)
     elif mode == 'gaussian':
@@ -1140,47 +1175,111 @@ def add_noise(xyz, noise_percent=0.01, mode='uniform', seed=None, verbose=True):
     xyz_noisy = xyz + noise
     return xyz_noisy
 
-def crop_point_cloud_xyz(xyz_after, crop_ratio=0.5, mode='center', verbose=True):
+def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
     """
     xyz_after に対して切り取り攻撃を行い、一部の点群のみを残し、表示する。
 
     Parameters:
     - xyz_after (np.ndarray): 埋め込み後の点群座標（N×3）
-    - crop_ratio (float): 残す点の割合（0.0～1.0]
-    - mode (str): 'center'（中心部を残す）または 'edge'（端部を残す）
-    - verbose (bool): 情報表示の有無
+    - keep_ratio (float): 残す点の割合（0.0～1.0]
+    - mode (str): 
+        - 'center': 重心に近い点を残す（球状クロッピング）
+        - 'edge': 重心から遠い点を残す（逆球状クロッピング）
+        - 'axis': 指定した軸に沿って端から切断する
+    - axis (int): 'axis' モードで使用する切断軸 (0:X軸, 1:Y軸, 2:Z軸)
 
     Returns:
     - xyz_cropped (np.ndarray): 切り取り後の点群座標
     """
-    import open3d as o3d
-    assert 0.0 < crop_ratio <= 1.0, "crop_ratioは (0, 1] で指定してください"
+    assert 0.0 < keep_ratio <= 1.0, "keep_ratioは (0, 1] で指定してください"
     N = xyz_after.shape[0]
-    keep_n = int(N * crop_ratio)
-
-    center = np.mean(xyz_after, axis=0)
-    dists = np.linalg.norm(xyz_after - center, axis=1)
+    keep_n = int(N * keep_ratio)
 
     if mode == 'center':
+        # 重心からの距離でソートし、近い順に残す
+        center = np.mean(xyz_after, axis=0)
+        dists = np.linalg.norm(xyz_after - center, axis=1)
         keep_indices = np.argsort(dists)[:keep_n]
+        
     elif mode == 'edge':
+        # 重心からの距離でソートし、遠い順に残す
+        center = np.mean(xyz_after, axis=0)
+        dists = np.linalg.norm(xyz_after - center, axis=1)
         keep_indices = np.argsort(dists)[-keep_n:]
+        
+    elif mode == 'axis':
+        # 指定軸の値でソートし、片側を残す（平面切断）
+        if axis not in [0, 1, 2]:
+            raise ValueError("axisは 0(x), 1(y), 2(z) のいずれかを指定してください")
+        
+        # 軸の値に基づいてインデックスをソート
+        indices = np.argsort(xyz_after[:, axis])
+        
+        # 値が小さいほうを残す（あるいは大きいほうを残す）
+        # ここでは「値が小さい順」の上位 keep_n 個を残します
+        keep_indices = indices[:keep_n]
+        
     else:
-        raise ValueError("modeは 'center' または 'edge' を指定してください")
+        raise ValueError("modeは 'center', 'edge', 'axis' のいずれかを指定してください")
 
     xyz_cropped = xyz_after[keep_indices]
 
-    if verbose:
-        print(f"切り取り攻撃 ({mode}): 元点数={N} → 残点数={keep_n} ({crop_ratio*100:.1f}%)")
+    print(f"[Attack] 切り取り攻撃 ({mode}): 元点数={N} → 残点数={keep_n} ({keep_ratio*100:.1f}%)")
 
     # 可視化
     cropped_pcd = o3d.geometry.PointCloud()
     cropped_pcd.points = o3d.utility.Vector3dVector(xyz_cropped)
     cropped_pcd.paint_uniform_color([1, 0.6, 0])  # オレンジ系で表示
-    o3d.visualization.draw_geometries([cropped_pcd], window_name="Cropped Point Cloud")
+    
+    # 軸などのガイドを表示するためにフレームを追加
+    mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
+    o3d.visualization.draw_geometries([cropped_pcd, mesh_frame], window_name=f"Cropped Point Cloud ({mode})")
 
     return xyz_cropped
 
+def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
+    """
+    点群に対してラプラシアンスムージング攻撃を行う
+    
+    Parameters:
+    - xyz: (N, 3) の点群座標配列
+    - lambda_val: スムージングの強度係数 λ (0.0 < lambda <= 1.0)。
+                  1.0に近いほど近傍点の重心へ強く移動します。
+                  論文(El Zein et al.)では delta(relaxation) と呼ばれるパラメータに相当します。
+    - iterations: 繰り返し回数。回数が多いほど平滑化が進みます。
+    - k: 近傍点の数。点群の接続関係を定義するために使用します。
+    - verbose: ログ表示の有無
+
+    Returns:
+    - xyz_smooth: スムージング後の点群座標
+    """
+    if verbose:
+        print(f"[Attack] スムージング: lambda={lambda_val}, iterations={iterations}, k={k}")
+
+    N = xyz.shape[0]
+    xyz_smooth = xyz.copy()
+
+    # 近傍探索のための学習 (一度だけ実行)
+    # ※厳密には反復ごとに近傍が変わる可能性がありますが、
+    #   微小な移動であれば固定した方が計算効率が良く、攻撃としても十分機能します。
+    nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto').fit(xyz)
+    
+    # 各点の近傍インデックスを取得 (自分自身が含まれるため k+1 個取得し、自分を除く)
+    _, indices = nbrs.kneighbors(xyz)
+    neighbor_indices = indices[:, 1:] # (N, k)
+
+    for i in range(iterations):
+        # 全点の近傍点の座標を取得 (N, k, 3)
+        neighbor_coords = xyz_smooth[neighbor_indices]
+        
+        # 近傍点の重心を計算 (N, 3)
+        centroids = np.mean(neighbor_coords, axis=1)
+        
+        # 重心方向へ移動 (Laplacian smoothing update rule)
+        # P_new = P_old + lambda * (Centroid - P_old)
+        xyz_smooth = xyz_smooth + lambda_val * (centroids - xyz_smooth)
+        
+    return xyz_smooth
 
 def reconstruct_point_cloud(xyz_after, xyz_orig, threshold=0.01, verbose=True):
     """
@@ -1209,7 +1308,6 @@ def reconstruct_point_cloud(xyz_after, xyz_orig, threshold=0.01, verbose=True):
         print("平均距離:", np.mean(dists))
     return xyz_reconstructed
 
-
 def reorder_point_cloud(xyz_after, xyz_orig, verbose=True):
     """
     xyz_afterの順番を、xyz_origと最も近い点で対応づけて並び替える。
@@ -1226,12 +1324,13 @@ def reorder_point_cloud(xyz_after, xyz_orig, verbose=True):
     xyz_reordered = xyz_after[indices]
 
     if verbose:
-        print(f"[Reordering] 順序を xyz_orig に再整列しました。")
+        print(f"[Reorder] 順序を xyz_orig に再整列しました。")
 
     return xyz_reordered
 
-
-##################################### 参考用 ##########################################
+# =========================================================
+#  参考関数群
+# =========================================================
 
 def sort_and_shuffle_points(xyz, seed=42):
     norms = np.linalg.norm(xyz, axis=1)

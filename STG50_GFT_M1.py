@@ -22,14 +22,14 @@ if __name__ == "__main__":
     """
     # 基礎
     n = 16  # 画像サイズn×n
-    beta = 1e-3
+    beta = 0.6e-3
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 埋め込み容量アプローチ
     split_mode = 1
     # 周波数帯域アプローチ
-    min_spectre = 0.83
-    max_spectre = 1.0
+    min_spectre = 0.03
+    max_spectre = 0.2
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
@@ -40,6 +40,7 @@ if __name__ == "__main__":
     pcd_before = o3d.io.read_point_cloud(input_file)
 
     # 2. 前処理（色情報追加・理想クラスタ数計算）
+    pcd_before = STG50F.normalize_point_cloud(pcd_before)
     pcd_before = STG50F.add_colors(pcd_before, color="grad")
     # o3d.visualization.draw_geometries([pcd_before])
     xyz = np.asarray(pcd_before.points)
@@ -48,7 +49,7 @@ if __name__ == "__main__":
     # 3. 埋め込みビット生成
     watermark_bits = STG50F.image_to_bitarray(image_path, n=n)
     watermark_bits_length = len(watermark_bits)
-    print(f"埋込ビット数：{watermark_bits_length} (画像: {n}x{n})")
+    print(f"[Debug] 埋込ビット数：{watermark_bits_length} (画像: {n}x{n})")
     pcd_after = o3d.geometry.PointCloud() # 埋め込み後の点群基盤
 
     # 4. クラスタリング
@@ -64,38 +65,42 @@ if __name__ == "__main__":
         flatness_weighting=flatness_weighting, k_neighbors=20, 
         min_spectre=min_spectre, max_spectre=max_spectre
     )
-
+    embed_time = time.time() - start
     diffs = np.linalg.norm(xyz_after - xyz, axis=1)
     max_embed_shift = np.max(diffs)
-    print("最大埋め込み誤差:", max_embed_shift)
+    print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = STG50F.add_noise(xyz_after, noise_percent=0.02, mode='gaussian', seed=42)
+    # xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=0.1, mode='gaussian', seed=42)
 
     # OP. 切り取り攻撃
-    # xyz_after = STG50F.crop_point_cloud_xyz(xyz_after, crop_ratio=0.9, mode='center')
+    # xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.3, mode='axis', axis=0)
     # xyz_after = STG50F.reconstruct_point_cloud(xyz_after, xyz, threshold=max_embed_shift*2)
-    # print(len(xyz_after))
     # xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
     # print(len(xyz_after))
 
+    # OP. スムージング攻撃
+    xyz_after = STG50F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
+
     # 6. 単多数決方式の抽出
+    start = time.time()
     extracted_bits = STG50F.extract_watermark_xyz(
         xyz_after, xyz, labels, watermark_bits_length, split_mode=split_mode,
         min_spectre=min_spectre, max_spectre=max_spectre
     )
+    extract_time = time.time() - start
 
     # 7. 評価
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    STG50F.calc_psnr_xyz(pcd_before, pcd_after, by_index=True)
+    STG50F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
 
     # 8. 確認用
     o3d.visualization.draw_geometries([pcd_after])
     print(f"埋込ビット：{len(watermark_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
-    STG50F.evaluate_watermark(watermark_bits, extracted_bits)
+    STG50F.evaluate_robustness(watermark_bits, extracted_bits)
     STG50F.bitarray_to_image(extracted_bits, n=n, save_path="recovered.bmp")
-    all_time = time.time() - start
-    print(f"実行時間: {all_time:.2f}秒\n")
+    print(f"埋込時間: {embed_time:.2f}秒")
+    print(f"抽出時間: {extract_time:.2f}秒\n")
