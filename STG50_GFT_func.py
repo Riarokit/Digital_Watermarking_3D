@@ -2,11 +2,11 @@ import numpy as np
 import open3d as o3d
 import random
 import string
-from sklearn.neighbors import kneighbors_graph
 from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
 from concurrent.futures import ProcessPoolExecutor
-from sklearn.neighbors import NearestNeighbors
+from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbors_graph
+import scipy.sparse as sp
 import zlib
 from PIL import Image
 import copy
@@ -144,9 +144,8 @@ def normalize_point_cloud(pcd):
 #  クラスタリング関数群
 # =========================================================
 
-def kmeans_cluster_points(xyz, num_clusters=None, seed=42):
-    if num_clusters is None:
-        num_clusters = len(xyz) // 2000
+def kmeans_cluster_points(xyz, cluster_point=1000, seed=42):
+    num_clusters = len(xyz) // cluster_point
     kmeans = KMeans(n_clusters=num_clusters, random_state=seed)
     labels = kmeans.fit_predict(xyz)
     
@@ -449,12 +448,63 @@ def compute_cluster_weights(flatness_dict, flatness_weighting=0):
 #  グラフ構築・埋め込み・抽出関数群
 # =========================================================
 
-def build_graph(xyz, k=6):
-    adj = kneighbors_graph(xyz, k, mode='distance', include_self=False) # k最近傍グラフ構築
-    W = adj.toarray() # 距離行列に変換
-    dists = W[W > 0] # 全エッジ距離抽出
-    sigma = np.mean(dists) if len(dists) > 0 else 1.0 # 距離平均を計算
-    W[W > 0] = np.exp(-W[W > 0]**2 / (sigma**2)) # 距離重み計算、重み付き隣接行列に変換
+def build_graph(xyz, graph_mode='knn', k=12, radius=0.05):
+    """
+    点群からグラフ（重み付き隣接行列）を構築する関数
+
+    Parameters:
+    - xyz: 点群座標 (N, 3)
+    - mode: グラフ構築モード
+        - 'knn': k近傍法 (推奨: k=12~16)
+        - 'radius': 半径法 (radius以内の点を接続)
+        - 'hybrid': k近傍かつ、radius以内の点のみ接続 (遠すぎる接続を排除)
+    - k: k近傍法のk
+    - radius: 半径法の閾値 (データのスケールに依存するため注意)
+
+    Returns:
+    - W: 重み付き隣接行列 (scipy.sparse.csr_matrix or dense ndarray)
+    """
+    
+    # 1. 隣接関係の構築 (adjacency matrix)
+    if graph_mode == 'knn':
+        # include_self=Falseで自分自身へのループを排除
+        adj = kneighbors_graph(xyz, k, mode='distance', include_self=False)
+        
+    elif graph_mode == 'radius':
+        adj = radius_neighbors_graph(xyz, radius, mode='distance', include_self=False)
+        
+    elif graph_mode == 'hybrid':
+        # まずk近傍で大きめに取る
+        adj = kneighbors_graph(xyz, k, mode='distance', include_self=False)
+        # 疎行列の構造を保ったまま、radiusより大きい距離のエッジを削除（0にする）
+        adj.data[adj.data > radius] = 0
+        adj.eliminate_zeros() # 0になったエッジを構造から削除
+        
+    else:
+        raise ValueError("mode must be 'knn', 'radius', or 'hybrid'")
+
+    # 2. 重みの計算 (Gaussian Kernel)
+    # 行列形式を扱いやすい形に変換
+    W = adj.toarray() 
+    
+    # 距離が存在するエッジのみ抽出
+    mask = W > 0
+    dists = W[mask]
+    
+    # 孤立点対策: エッジが一つもない場合はsigmaを1.0にしてエラー回避
+    if len(dists) > 0:
+        sigma = np.mean(dists)
+        # ガウス重み: 近いほど1、遠いほど0に近づく
+        W[mask] = np.exp(-W[mask]**2 / (sigma**2))
+    else:
+        # 万が一エッジがゼロの場合（radiusが小さすぎる時など）
+        print("Warning: No edges found. Check your radius or k.")
+    
+    # 3. 対称化 (無向グラフにするため)
+    # GFTでは通常、無向グラフ（対称行列）が望ましいため、W = (W + W.T) / 2 などをする場合が多いですが
+    # ここでは元の実装に合わせてそのまま返します（あるいは以下のように最大値を取って対称化も可）
+    W = np.maximum(W, W.T) 
+
     return W
 
 def gft_basis(W):
@@ -498,6 +548,7 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
 ### 関数間違い注意！！
 def embed_watermark_xyz(
     xyz, labels, embed_bits, beta=0.01,
+    graph_mode='knn', k=10, radius=0.05,
     split_mode=0, flatness_weighting=0, k_neighbors=20, 
     min_spectre=0.0, max_spectre=1.0
 ):
@@ -535,7 +586,7 @@ def embed_watermark_xyz(
         if len(idx) <= skip_threshold:
                 continue  # 点数が少なすぎるクラスタはスキップ
         pts = xyz[idx]
-        W = build_graph(pts, k=6)
+        W = build_graph(pts, graph_mode=graph_mode, k=k, radius=radius)
         basis, eigvals = gft_basis(W)
         for channel in range(3):  # 0:x, 1:y, 2:z
             bits = embed_bits_per_channel[channel]
@@ -558,8 +609,9 @@ def embed_watermark_xyz(
     return xyz_after
 
 def extract_watermark_xyz(
-    xyz_emb, xyz_orig, labels, embed_bits_length, split_mode=0,
-    min_spectre=0.0, max_spectre=1.0
+    xyz_emb, xyz_orig, labels, embed_bits_length, 
+    graph_mode='knn', k=10, radius=0.05,
+    split_mode=0, min_spectre=0.0, max_spectre=1.0
 ):
     if split_mode == 0:
         skip_threshold = embed_bits_length/2
@@ -574,8 +626,7 @@ def extract_watermark_xyz(
             if len(pts_emb) != len(pts_orig):
                 continue  # 点数不一致クラスタはスキップ
 
-            actual_k = min(6, len(idx) - 1)
-            W = build_graph(pts_orig, k=actual_k)
+            W = build_graph(pts_orig, graph_mode=graph_mode, k=k, radius=radius)
             basis, eigvals = gft_basis(W)
             Q_ = len(basis)
             q_start = int(Q_ * min_spectre)
