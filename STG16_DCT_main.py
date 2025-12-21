@@ -1,6 +1,6 @@
 import numpy as np
 import open3d as o3d
-import STG61_DCT_func as STG61F
+import STG16_DCT_func as STG61F
 import time
 
 if __name__ == "__main__":

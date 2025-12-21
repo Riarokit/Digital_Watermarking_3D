@@ -1,6 +1,6 @@
 import numpy as np
 import open3d as o3d
-import STG60_DCT_func as STG60F
+import STG15_DCT_func as STG60F
 import time
 
 """
