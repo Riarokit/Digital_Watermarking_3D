@@ -130,9 +130,9 @@ def generate_paper_figure_final():
     # ax3.legend(loc='lower center', frameon=True)
 
     plt.tight_layout()
-    plt.savefig("STG53_demo.png", dpi=300, bbox_inches='tight')
+    plt.savefig("STG50_demo.png", dpi=300, bbox_inches='tight')
     plt.show()
-    print("画像を 'STG53_demo.png' として保存しました。")
+    print("画像を 'STG50_demo.png' として保存しました。")
 
 if __name__ == "__main__":
     generate_paper_figure_final()

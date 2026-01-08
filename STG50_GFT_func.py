@@ -140,6 +140,31 @@ def normalize_point_cloud(pcd):
     
     return pcd
 
+def estimate_normals_xyz(xyz, knn=30, orient_knn=30, make_outward=True):
+    """
+    xyz: (N,3)
+    return normals: (N,3) unit vectors
+    """
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=knn))
+    # 近傍で向きを揃える（符号反転がバラけると埋め込み/抽出が不安定になる）
+    pcd.orient_normals_consistent_tangent_plane(orient_knn)
+
+    normals = np.asarray(pcd.normals)
+
+    if make_outward:
+        # “外向きっぽく”揃える簡易策：重心からのベクトルと内積が負なら反転
+        centroid = np.mean(xyz, axis=0)
+        v = xyz - centroid
+        flip = np.sum(normals * v, axis=1) < 0
+        normals[flip] *= -1.0
+
+    # 念のため正規化
+    norms = np.linalg.norm(normals, axis=1, keepdims=True)
+    normals = normals / np.maximum(norms, 1e-12)
+    return normals
+
 # =========================================================
 #  クラスタリング関数群
 # =========================================================
@@ -1010,6 +1035,137 @@ def extract_watermark_xyz_check(
     
     else:
         raise ValueError("split_modeは0（冗長化）か1（3分割）のみ指定可能です")
+    
+
+### 関数間違い注意！！
+def embed_watermark_normal(
+    xyz, normals, labels, embed_bits, beta=0.01,
+    graph_mode='knn', k=10, radius=0.05,
+    flatness_weighting=0, k_neighbors=20,
+    min_spectre=0.0, max_spectre=1.0
+):
+    """
+    法線方向スカラー信号 s_i = <p_i, n_i> にGFT埋め込みし、
+    p'_i = p_i + (s'_i - s_i) * n_i で更新する（法線方向にのみ変位）。
+    """
+    xyz_after = xyz.copy()
+    cluster_ids = np.unique(labels)
+
+    # 重み
+    flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
+    weights = compute_cluster_weights(flatness_dict, flatness_weighting)
+
+    # スケール
+    phi = max(
+        np.max(xyz[:, 0]) - np.min(xyz[:, 0]),
+        np.max(xyz[:, 1]) - np.min(xyz[:, 1]),
+        np.max(xyz[:, 2]) - np.min(xyz[:, 2])
+    )
+
+    skip_threshold = len(embed_bits) / 2
+    for c in cluster_ids:
+        idx = np.where(labels == c)[0]
+        if len(idx) <= skip_threshold:
+            continue
+
+        pts = xyz[idx]
+        nrm = normals[idx]
+
+        # 法線方向スカラー信号
+        s = np.sum(pts * nrm, axis=1)  # (Nc,)
+
+        # グラフ & GFT
+        W = build_graph(pts, graph_mode=graph_mode, k=k, radius=radius)
+        basis, eigvals = gft_basis(W)
+        gft_coeffs = gft(s, basis)
+
+        Q_ = len(gft_coeffs)
+        q_start = int(Q_ * min_spectre)
+        q_end   = int(Q_ * max_spectre)
+        Q_embed = max(q_end - q_start, 0)
+        if Q_embed <= 0:
+            continue
+
+        bits_len = len(embed_bits)
+        n_repeat = Q_embed // bits_len if bits_len > 0 else 1
+        redundant_bits = repeat_bits_blockwise(embed_bits, n_repeat, Q_embed)
+
+        for i in range(Q_embed):
+            w = redundant_bits[i] * 2 - 1  # 0/1 -> -1/+1
+            gft_coeffs[q_start + i] += w * beta * weights[c] * phi
+
+        s_emb = igft(gft_coeffs, basis)
+
+        # 法線方向変位だけ適用
+        delta_n = (s_emb - s)  # (Nc,)
+        xyz_after[idx] = pts + delta_n[:, None] * nrm
+
+    return xyz_after
+
+def extract_watermark_normal(
+    xyz_emb, xyz_orig, normals, labels, embed_bits_length,
+    graph_mode='knn', k=10, radius=0.05,
+    min_spectre=0.0, max_spectre=1.0
+):
+    """
+    s_i = <p_i, n_i> を用いて、GFT係数差分の符号でビット抽出（多数決）。
+    """
+    skip_threshold = embed_bits_length / 2
+    bit_lists = [[] for _ in range(embed_bits_length)]
+
+    for c in np.unique(labels):
+        idx = np.where(labels == c)[0]
+        if len(idx) <= skip_threshold:
+            continue
+
+        pts_emb  = xyz_emb[idx]
+        pts_orig = xyz_orig[idx]
+        if len(pts_emb) != len(pts_orig):
+            continue
+
+        nrm = normals[idx]
+
+        s_emb  = np.sum(pts_emb  * nrm, axis=1)
+        s_orig = np.sum(pts_orig * nrm, axis=1)
+
+        W = build_graph(pts_orig, graph_mode=graph_mode, k=k, radius=radius)
+        basis, eigvals = gft_basis(W)
+
+        gft_emb  = gft(s_emb, basis)
+        gft_orig = gft(s_orig, basis)
+
+        Q_ = len(gft_emb)
+        q_start = int(Q_ * min_spectre)
+        q_end   = int(Q_ * max_spectre)
+        Q_extract = max(q_end - q_start, 0)
+        if Q_extract <= 0:
+            continue
+
+        n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
+
+        # 既存extractのロジックを踏襲（冗長分をbitごとに集める）
+        for bit_idx in range(embed_bits_length):
+            for rep in range(n_repeat):
+                i = bit_idx * n_repeat + rep
+                if i < Q_extract:
+                    diff = gft_emb[q_start + i] - gft_orig[q_start + i]
+                    bit = 1 if diff > 0 else 0
+                    bit_lists[bit_idx].append(bit)
+
+        for i in range(n_repeat * embed_bits_length, Q_extract):
+            bit_idx = i % embed_bits_length
+            diff = gft_emb[q_start + i] - gft_orig[q_start + i]
+            bit = 1 if diff > 0 else 0
+            bit_lists[bit_idx].append(bit)
+
+    extracted_bits = []
+    for votes in bit_lists:
+        if len(votes) == 0:
+            extracted_bits.append(0)
+        else:
+            extracted_bits.append(1 if votes.count(1) > votes.count(0) else 0)
+    return extracted_bits
+
 
 # =========================================================
 #  誤り訂正関数群
