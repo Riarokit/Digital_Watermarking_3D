@@ -6,7 +6,7 @@ import time
 if __name__ == "__main__":
     """
     main関数概要:
-    点群をクラスタリングし、各クラスタの座標を信号としてGFTを行う。
+    点群をクラスタリングし、各クラスタの疑似平面からの高さを信号値としてGFTを行う。
     各クラスタのGFT係数にビット列を埋め込み、各クラスタから復元した複数の同ビットを最後に一度のみ多数決して決定。
 
     使用変数説明:
@@ -55,6 +55,7 @@ if __name__ == "__main__":
     # o3d.visualization.draw_geometries([pcd_before])
     xyz = np.asarray(pcd_before.points)
     colors = np.asarray(pcd_before.colors)
+    normals = STG50F.estimate_normals_xyz(xyz, knn=30, orient_knn=30, make_outward=True)
 
     # 3. 埋め込みビット生成
     watermark_bits = STG50F.image_to_bitarray(image_path, n=n)
@@ -70,12 +71,14 @@ if __name__ == "__main__":
     # labels = STG50F.split_large_clusters(xyz, labels, limit_points=3000)
 
     # 5. 単多数決方式の埋め込み
-    xyz_after = STG50F.embed_watermark_xyz(
-        xyz, labels, watermark_bits, beta=beta, 
+    xyz_after = STG50F.embed_watermark_pseudoplane(
+        xyz, labels, watermark_bits,
+        beta=beta,
         graph_mode=graph_mode, k=k, radius=radius,
-        split_mode=split_mode, flatness_weighting=flatness_weighting, k_neighbors=20, 
-        min_spectre=min_spectre, max_spectre=max_spectre
+        flatness_weighting=flatness_weighting, k_neighbors=20,
+        min_spectre=min_spectre, max_spectre=max_spectre,
     )
+
     embed_time = time.time() - start
     diffs = np.linalg.norm(xyz_after - xyz, axis=1)
     max_embed_shift = np.max(diffs)
@@ -95,10 +98,10 @@ if __name__ == "__main__":
 
     # 6. 単多数決方式の抽出
     start = time.time()
-    extracted_bits = STG50F.extract_watermark_xyz(
+    extracted_bits = STG50F.extract_watermark_pseudoplane(
         xyz_after, xyz, labels, watermark_bits_length,
         graph_mode=graph_mode, k=k, radius=radius,
-        split_mode=split_mode, min_spectre=min_spectre, max_spectre=max_spectre
+        min_spectre=min_spectre, max_spectre=max_spectre
     )
     extract_time = time.time() - start
 

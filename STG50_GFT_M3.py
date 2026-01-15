@@ -26,7 +26,7 @@ if __name__ == "__main__":
     # 画像サイズn×n
     n = 16
     # 埋め込み強度
-    beta = 1e-3
+    beta = 2e-3
     # 1クラスタあたりの点数目安(k-means用)
     cluster_point = 500
     # グラフ構築モード
@@ -83,7 +83,7 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=1.0, mode='gaussian', seed=42)
+    xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=3.0, mode='gaussian', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.3, mode='axis', axis=0)
