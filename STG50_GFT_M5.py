@@ -7,7 +7,7 @@ if __name__ == "__main__":
     """
     main関数概要:
     点群をクラスタリングし、各クラスタの疑似平面からの高さを信号値としてGFTを行う。
-    各クラスタのGFT係数にビット列を埋め込み、各クラスタから復元した複数の同ビットを最後に一度のみ多数決して決定。
+    各クラスタのGFT係数にビット列をまたがって埋め込み、クラスタごとに該当するビットを最後に一度のみ多数決して決定。
 
     使用変数説明:
     n                        = 画像サイズn×n
@@ -23,25 +23,25 @@ if __name__ == "__main__":
     OP: 切り取りやノイズ付加などのオプション手順
     """
     # 画像サイズn×n
-    n = 8
+    n = 16
     # 埋め込み強度
-    beta = 0.235e-3
+    beta = 0.36e-3
     # 1クラスタあたりの点数目安(k-means用)
-    cluster_point = 200
+    cluster_point = 1500
     # グラフ構築モード
     graph_mode = 'knn'
     k = 6
     radius = 0.03
     # 平面曲面アプローチ
-    flatness_weighting = 1
+    flatness_weighting = 0
     # 周波数帯域アプローチ
     min_spectre = 0.0
-    max_spectre = 0.5
+    max_spectre = 1.0
 
     # 1. データ取得
-    image_path = "watermark8.bmp"  # 埋め込みたい画像ファイル
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon_vrip_res2.ply"
+    image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"
@@ -68,13 +68,14 @@ if __name__ == "__main__":
     # labels = STG50F.ransac_cluster_points(xyz)
     # labels = STG50F.split_large_clusters(xyz, labels, limit_points=3000)
 
-    # 5. 単多数決方式の埋め込み
-    xyz_after = STG50F.embed_watermark_pseudoplane(
+    # 5. マルチクラスタ跨ぎ方式の埋め込み
+    xyz_after = STG50F.embed_watermark_pseudoplane_multicluster(
         xyz, labels, watermark_bits,
         beta=beta,
         graph_mode=graph_mode, k=k, radius=radius,
         flatness_weighting=flatness_weighting, k_neighbors=20,
         min_spectre=min_spectre, max_spectre=max_spectre,
+        cluster_order="id",
     )
 
     embed_time = time.time() - start
@@ -83,7 +84,7 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=0.9, mode='gaussian', seed=42)
+    xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=0.9, mode='gaussian', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.3, mode='axis', axis=0)
@@ -94,12 +95,13 @@ if __name__ == "__main__":
     # OP. スムージング攻撃
     # xyz_after = STG50F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
 
-    # 6. 単多数決方式の抽出
+    # 6. マルチクラスタ跨ぎ方式の抽出
     start = time.time()
-    extracted_bits = STG50F.extract_watermark_pseudoplane(
+    extracted_bits = STG50F.extract_watermark_pseudoplane_multicluster(
         xyz_after, xyz, labels, watermark_bits_length,
         graph_mode=graph_mode, k=k, radius=radius,
-        min_spectre=min_spectre, max_spectre=max_spectre
+        min_spectre=min_spectre, max_spectre=max_spectre,
+        cluster_order="id",
     )
     extract_time = time.time() - start
 

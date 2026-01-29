@@ -1533,6 +1533,289 @@ def extract_watermark_pseudoplane(
 
     return extracted_bits
 
+
+
+def _compute_cluster_capacity_pseudoplane(
+    xyz: np.ndarray,
+    labels: np.ndarray,
+    graph_mode: str,
+    k: int,
+    radius: float,
+    min_spectre: float,
+    max_spectre: float,
+    min_points_for_graph: int,
+):
+    """
+    各クラスタの埋め込み可能長 Q_embed を計算して返す。
+    - グラフ構築/固有分解が成立する最小点数未満は capacity=0 とする。
+    Returns:
+        caps: dict {cluster_id: Q_embed}
+    """
+    caps = {}
+    for c in np.unique(labels):
+        idx = np.where(labels == c)[0]
+        if len(idx) < min_points_for_graph:
+            caps[int(c)] = 0
+            continue
+
+        pts = xyz[idx]
+        W = build_graph(pts, graph_mode=graph_mode, k=k, radius=radius)
+        basis, _ = gft_basis(W)
+
+        Q_ = len(basis)
+        q_start = int(Q_ * min_spectre)
+        q_end = int(Q_ * max_spectre)
+        Q_embed = max(q_end - q_start, 0)
+
+        caps[int(c)] = Q_embed
+    return caps
+
+
+def _build_global_slot_map(
+    xyz: np.ndarray,
+    labels: np.ndarray,
+    graph_mode: str,
+    k: int,
+    radius: float,
+    min_spectre: float,
+    max_spectre: float,
+    min_points_for_graph: int,
+    cluster_order: str = "id",  # "id" or "size_desc"
+):
+    """
+    「全クラスタの埋め込み帯域係数」を1本のスロット列にしたときの対応表を作る。
+
+    Returns:
+      slot_map: list of tuples
+        [
+          (cluster_id, idx_points, pts_orig, basis, q_start, local_i),
+          ...
+        ]
+      ※ idx_points / pts_orig / basis などをまとめて返すのは、embed/extract側で
+        同じグラフ・同じbasisを使うため（origベース）。
+    """
+    # クラスタ順序を決める（抽出と一致させる必要があるため、決定的に）
+    clusters = [int(c) for c in np.unique(labels)]
+    if cluster_order == "size_desc":
+        clusters.sort(key=lambda c: np.sum(labels == c), reverse=True)
+    else:
+        clusters.sort()
+
+    slot_map = []
+    cluster_cache = {}
+
+    for c in clusters:
+        idx = np.where(labels == c)[0]
+        if len(idx) < min_points_for_graph:
+            continue
+
+        pts = xyz[idx]
+        W = build_graph(pts, graph_mode=graph_mode, k=k, radius=radius)
+        basis, _ = gft_basis(W)
+
+        Q_ = len(basis)
+        q_start = int(Q_ * min_spectre)
+        q_end = int(Q_ * max_spectre)
+        Q_embed = max(q_end - q_start, 0)
+        if Q_embed <= 0:
+            continue
+
+        # キャッシュ（同クラスタ内で x/y/z も扱う等に拡張しやすい）
+        cluster_cache[c] = (idx, pts, basis, q_start, Q_embed)
+
+        for local_i in range(Q_embed):
+            slot_map.append((c, local_i))
+
+    return slot_map, cluster_cache
+
+
+def embed_watermark_pseudoplane_multicluster(
+    xyz: np.ndarray,
+    labels: np.ndarray,
+    embed_bits,
+    beta: float = 0.01,
+    graph_mode: str = 'knn',
+    k: int = 10,
+    radius: float = 0.05,
+    flatness_weighting: int = 0,
+    k_neighbors: int = 20,
+    min_spectre: float = 0.0,
+    max_spectre: float = 1.0,
+    cluster_order: str = "id",         # "id" or "size_desc"
+    min_points_for_graph: int = None,  # Noneなら max(k+1,3)
+):
+    """
+    1つの embed_bits をクラスタをまたいで分割して埋め込む版（疑似平面）。
+    - 全クラスタの埋め込み可能係数（帯域）を “global slot” として連結し、
+      repeat_bits_blockwise で global slot 長に合わせて冗長化して埋め込む。
+    - 座標更新は各クラスタの疑似平面法線方向のみ。
+
+    期待する効果:
+    - クラスタ数を増やして1クラスタ点数が減っても、全体としての容量を稼げる。
+    """
+    xyz_after = xyz.copy()
+    bits_len = len(embed_bits)
+    if bits_len == 0:
+        return xyz_after
+
+    if min_points_for_graph is None:
+        min_points_for_graph = max(k + 1, 3)
+
+    # 重み（既存ロジック流用）
+    flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
+    weights = compute_cluster_weights(flatness_dict, flatness_weighting)
+
+    # スケール（既存ロジック踏襲）
+    phi = max(
+        np.max(xyz[:, 0]) - np.min(xyz[:, 0]),
+        np.max(xyz[:, 1]) - np.min(xyz[:, 1]),
+        np.max(xyz[:, 2]) - np.min(xyz[:, 2])
+    )
+
+    # global slot を作る（origベースで決定的に）
+    slot_map, cluster_cache = _build_global_slot_map(
+        xyz, labels,
+        graph_mode=graph_mode, k=k, radius=radius,
+        min_spectre=min_spectre, max_spectre=max_spectre,
+        min_points_for_graph=min_points_for_graph,
+        cluster_order=cluster_order,
+    )
+    total_slots = len(slot_map)
+    if total_slots <= 0:
+        print("[MultiCluster] No available slots. Check clustering / min_spectre~max_spectre / graph params.")
+        return xyz_after
+
+    # global slot 長に合わせて冗長化（bit列を全体に均等にばらまく）
+    n_repeat = total_slots // bits_len if bits_len > 0 else 1
+    redundant_bits = repeat_bits_blockwise(embed_bits, n_repeat, total_slots)
+
+    # 各クラスタごとに「一回」GFTして、該当slot分だけ係数変調して戻す
+    # （slot単位で毎回固有分解すると激重なので、クラスタ単位でまとめて処理）
+    # まず、クラスタごとに “どのlocal_iに何ビットを入れるか” を集める
+    assign = {}  # {cluster_id: list[(local_i, bit)]}
+    for s, (c, local_i) in enumerate(slot_map):
+        b = int(redundant_bits[s])
+        assign.setdefault(c, []).append((local_i, b))
+
+    for c, items in assign.items():
+        idx, pts, basis, q_start, Q_embed = cluster_cache[c]
+
+        # 疑似平面（PCA）と高さ信号（origから）
+        centroid, normal = compute_pseudoplane_pca(pts)
+        h = cluster_height_signal(pts, centroid, normal)
+
+        # 高さ信号GFT
+        gft_coeffs = gft(h, basis)
+
+        # 係数変調（このクラスタに割り当てられたlocal_iのみ）
+        w_c = weights.get(c, 1.0)
+        for (local_i, bit01) in items:
+            w = bit01 * 2 - 1
+            gft_coeffs[q_start + local_i] += w * beta * w_c * phi
+
+        # 逆GFT → 法線方向のみ更新
+        h_emb = igft(gft_coeffs, basis)
+        delta_h = (h_emb - h)
+        xyz_after[idx] = pts + delta_h[:, None] * normal[None, :]
+
+    return xyz_after
+
+
+def extract_watermark_pseudoplane_multicluster(
+    xyz_emb: np.ndarray,
+    xyz_orig: np.ndarray,
+    labels: np.ndarray,
+    embed_bits_length: int,
+    graph_mode: str = 'knn',
+    k: int = 10,
+    radius: float = 0.05,
+    min_spectre: float = 0.0,
+    max_spectre: float = 1.0,
+    cluster_order: str = "id",         # embed側と必ず一致させる
+    min_points_for_graph: int = None,  # Noneなら max(k+1,3)
+):
+    """
+    embed_watermark_pseudoplane_multicluster の抽出版。
+    - global slot を同じ規則で再構築
+    - 各slotの差分符号を “そのslotが担当するbit番号” に投票
+    - 最後にbitごと多数決
+    """
+    if embed_bits_length <= 0:
+        return []
+
+    if min_points_for_graph is None:
+        min_points_for_graph = max(k + 1, 3)
+
+    # global slot を再構築（origベースで決定的に）
+    slot_map, cluster_cache = _build_global_slot_map(
+        xyz_orig, labels,
+        graph_mode=graph_mode, k=k, radius=radius,
+        min_spectre=min_spectre, max_spectre=max_spectre,
+        min_points_for_graph=min_points_for_graph,
+        cluster_order=cluster_order,
+    )
+    total_slots = len(slot_map)
+    if total_slots <= 0:
+        print("[MultiCluster] No available slots for extraction.")
+        return [0] * embed_bits_length
+
+    # embed側と同じ “bitの並べ方” を再現するため、total_slots から n_repeat を決める
+    n_repeat = total_slots // embed_bits_length if embed_bits_length > 0 else 1
+
+    # bitごとの投票箱
+    bit_lists = [[] for _ in range(embed_bits_length)]
+
+    # まずクラスタ単位で GFT差分を作っておく
+    # その上で slot_map に従って投票
+    cluster_diffs = {}  # {c: diff_gft_band_array}
+    for c, (idx, pts, basis, q_start, Q_embed) in cluster_cache.items():
+        pts_o = xyz_orig[idx]
+        pts_e = xyz_emb[idx]
+        if len(pts_o) != len(pts_e):
+            continue
+
+        centroid, normal = compute_pseudoplane_pca(pts_o)
+        h_orig = cluster_height_signal(pts_o, centroid, normal)
+        h_emb  = cluster_height_signal(pts_e, centroid, normal)
+
+        gft_orig = gft(h_orig, basis)
+        gft_emb  = gft(h_emb, basis)
+
+        # 帯域部分だけ取り出しておく（local_iで参照）
+        band_diff = gft_emb[q_start:q_start + Q_embed] - gft_orig[q_start:q_start + Q_embed]
+        cluster_diffs[c] = band_diff
+
+    # slotごとに「どのbitに投票するか」を決めて投票
+    # embed側の repeat_bits_blockwise と一致する投票割当:
+    # 先頭から n_repeat 個ずつ bit0, bit1, ... と割り当て、余りは i%embed_bits_length
+    # ※ slot_map の並び = embed側の並び と一致する必要がある
+    for s, (c, local_i) in enumerate(slot_map):
+        if c not in cluster_diffs:
+            continue
+        if local_i >= len(cluster_diffs[c]):
+            continue
+
+        diff = cluster_diffs[c][local_i]
+        bit = 1 if diff > 0 else 0
+
+        # slot index s が担当する bit index を再現
+        if n_repeat > 0 and s < n_repeat * embed_bits_length:
+            bit_idx = s // n_repeat
+        else:
+            bit_idx = s % embed_bits_length
+
+        bit_lists[bit_idx].append(bit)
+
+    # 多数決で確定
+    extracted_bits = []
+    for votes in bit_lists:
+        if len(votes) == 0:
+            extracted_bits.append(0)
+        else:
+            extracted_bits.append(1 if votes.count(1) > votes.count(0) else 0)
+
+    return extracted_bits
+
 # =========================================================
 #  誤り訂正関数群
 # =========================================================
