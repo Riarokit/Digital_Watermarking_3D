@@ -1368,13 +1368,13 @@ def embed_watermark_pseudoplane(
     """
     xyz_after = xyz.copy()
     cluster_ids = np.unique(labels)
-    color_list = visualize_clusters(xyz, labels)
-    visualize_clusters_with_pseudoplanes(
-        xyz, labels, color_list,
-        scale=1.2,
-        max_planes=30,      # 重ければ制限
-        show_frame=False
-    )
+    # color_list = visualize_clusters(xyz, labels)
+    # visualize_clusters_with_pseudoplanes(
+    #     xyz, labels, color_list,
+    #     scale=1.2,
+    #     max_planes=30,      # 重ければ制限
+    #     show_frame=False
+    # )
 
     # 既存のクラスタ平坦度 -> 重み（あなたの関数を流用）
     flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)

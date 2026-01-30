@@ -25,23 +25,24 @@ if __name__ == "__main__":
     # 画像サイズn×n
     n = 8
     # 埋め込み強度
-    beta = 0.235e-3
+    beta = 0.509e-3
     # 1クラスタあたりの点数目安(k-means用)
-    cluster_point = 200
+    cluster_point = 1500
     # グラフ構築モード
     graph_mode = 'knn'
     k = 6
     radius = 0.03
     # 平面曲面アプローチ
-    flatness_weighting = 1
+    flatness_weighting = 0
     # 周波数帯域アプローチ
     min_spectre = 0.0
     max_spectre = 0.5
+    
 
     # 1. データ取得
-    image_path = "watermark8.bmp"  # 埋め込みたい画像ファイル
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon_vrip_res2.ply"
+    image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"
@@ -83,7 +84,7 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=0.9, mode='gaussian', seed=42)
+    xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=0.9, mode='gaussian', seed=42)
 
     # OP. 切り取り攻撃
     # xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.3, mode='axis', axis=0)
