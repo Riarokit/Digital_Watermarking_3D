@@ -10,7 +10,7 @@ import scipy.sparse as sp
 import zlib
 from PIL import Image
 import copy
-# import cupy as cp
+import cupy as cp
 
 # =========================================================
 #  前処理関数群
@@ -712,16 +712,16 @@ def gft_basis(W):
     eigvals, eigvecs = np.linalg.eigh(L)
     return eigvecs, eigvals
 
-# def gft_basis_gpu(W):
-#     # 入力Wはnumpy配列（CPU）、ここでGPUに転送
-#     W_gpu = cp.asarray(W)
-#     D_gpu = cp.diag(W_gpu.sum(axis=1))
-#     L_gpu = D_gpu - W_gpu
-#     eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
-#     # 必要ならCPU（numpy配列）に戻す
-#     eigvals = cp.asnumpy(eigvals_gpu)
-#     eigvecs = cp.asnumpy(eigvecs_gpu)
-#     return eigvecs, eigvals
+def gft_basis_gpu(W):
+    # 入力Wはnumpy配列（CPU）、ここでGPUに転送
+    W_gpu = cp.asarray(W)
+    D_gpu = cp.diag(W_gpu.sum(axis=1))
+    L_gpu = D_gpu - W_gpu
+    eigvals_gpu, eigvecs_gpu = cp.linalg.eigh(L_gpu)
+    # 必要ならCPU（numpy配列）に戻す
+    eigvals = cp.asnumpy(eigvals_gpu)
+    eigvecs = cp.asnumpy(eigvecs_gpu)
+    return eigvecs, eigvals
 
 def gft(signal, basis):
     return basis.T @ signal
@@ -1364,7 +1364,6 @@ def embed_watermark_pseudoplane(
 
     注意:
     - 抽出でも同じ疑似平面が再構築できる必要があるため、平面推定は乱数に依存しないPCAを使用。
-    - 既存の重み設計（flatness_weighting等）を流用。
     """
     xyz_after = xyz.copy()
     cluster_ids = np.unique(labels)
@@ -1376,7 +1375,7 @@ def embed_watermark_pseudoplane(
     #     show_frame=False
     # )
 
-    # 既存のクラスタ平坦度 -> 重み（あなたの関数を流用）
+    # 既存のクラスタ平坦度 -> 重み
     flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
     weights = compute_cluster_weights(flatness_dict, flatness_weighting)
 
@@ -1411,7 +1410,7 @@ def embed_watermark_pseudoplane(
 
         # グラフ構築
         W = build_graph(pts, graph_mode=graph_mode, k=k, radius=radius)
-        basis, eigvals = gft_basis(W)
+        basis, eigvals = gft_basis_gpu(W)
 
         # 高さ信号をGFT
         gft_coeffs = gft(h, basis)
@@ -1492,7 +1491,7 @@ def extract_watermark_pseudoplane(
 
         # グラフはorigで
         W = build_graph(pts_orig, graph_mode=graph_mode, k=k, radius=radius)
-        basis, eigvals = gft_basis(W)
+        basis, eigvals = gft_basis_gpu(W)
 
         gft_orig = gft(h_orig, basis)
         gft_emb = gft(h_emb, basis)
@@ -1901,7 +1900,7 @@ def hamming74_decode(bits):
 #  評価関数群
 # =========================================================
 
-def evaluate_imperceptibility(pcd_before, pcd_after, reverse=False, by_index=False):
+def evaluate_imperceptibility(pcd_before, pcd_after, reverse=False, by_index=False, verbose=True):
     """
     点群の評価指標を計算します。
     - pcd_before, pcd_after: open3d.geometry.PointCloud
@@ -1959,11 +1958,9 @@ def evaluate_imperceptibility(pcd_before, pcd_after, reverse=False, by_index=Fal
         snr_ratio = sum_sq_signal / sum_sq_diff
     # max_range（PSNR用スケール）
     xyz = points_before
-    max_range = max(
-        np.max(xyz[:,0]) - np.min(xyz[:,0]),
-        np.max(xyz[:,1]) - np.min(xyz[:,1]),
-        np.max(xyz[:,2]) - np.min(xyz[:,2])
-    )
+    p_max = np.max(xyz, axis=0)
+    p_min = np.min(xyz, axis=0)
+    max_range = np.linalg.norm(p_max - p_min)
     # RMSE（√MSE）
     rmse = np.sqrt(mse)
     # SNR
@@ -1973,14 +1970,24 @@ def evaluate_imperceptibility(pcd_before, pcd_after, reverse=False, by_index=Fal
     # PSNR
     psnr = float('inf') if mse == 0 else 10 * np.log10((max_range ** 2) / mse)
 
-    print("------------------- 評価 -------------------")
-    print(f"MSE  : {mse:.6f}")
-    print(f"RMSE : {rmse:.6f}")
-    print(f"SNR  : {snr:.2f} dB")
-    print(f"PSNR : {psnr:.2f} dB (max_range={max_range:.4f})")
-    print(f"VSNR : {vsnr:.2f} dB")
+    if verbose:
+        print("------------------- 評価 -------------------")
+        print(f"MSE  : {mse:.6f}")
+        print(f"RMSE : {rmse:.6f}")
+        print(f"SNR  : {snr:.2f} dB")
+        print(f"PSNR : {psnr:.2f} dB (max_range={max_range:.4f})")
+        print(f"VSNR : {vsnr:.2f} dB")
+        
+    return {
+        'mse': mse,
+        'rmse': rmse,
+        'snr': snr,
+        'psnr': psnr,
+        'vsnr': vsnr,
+        'max_range': max_range
+    }
 
-def evaluate_robustness(watermark_bits, extracted_bits):
+def evaluate_robustness(watermark_bits, extracted_bits, verbose=True):
     """
     Corr（ピアソン相関係数）とBER（ビット誤り率）を計算し表示する。
     """
@@ -2002,8 +2009,11 @@ def evaluate_robustness(watermark_bits, extracted_bits):
         corr = np.corrcoef(w, w_)[0, 1]
 
     # --- 結果を表示 ---
-    print(f"Corr : {corr:.4f}")
-    print(f"BER  : {ber:.4f}")
+    if verbose:
+        print(f"Corr : {corr:.4f}")
+        print(f"BER  : {ber:.4f}")
+        
+    return corr, ber
 
 # =========================================================
 #  攻撃関数群
@@ -2089,7 +2099,7 @@ def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
     
     # 軸などのガイドを表示するためにフレームを追加
     mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
-    o3d.visualization.draw_geometries([cropped_pcd, mesh_frame], window_name=f"Cropped Point Cloud ({mode})")
+    # o3d.visualization.draw_geometries([cropped_pcd, mesh_frame], window_name=f"Cropped Point Cloud ({mode})")
 
     return xyz_cropped
 
