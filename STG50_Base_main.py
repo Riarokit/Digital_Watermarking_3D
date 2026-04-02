@@ -74,16 +74,13 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=3.0, mode='gaussian', seed=42)
-
-    # OP. 切り取り攻撃
-    # xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.3, mode='axis', axis=0)
-    # # xyz_after = STG50F.reconstruct_point_cloud(xyz_after, xyz, threshold=max_embed_shift*2)
-    # xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
-    # print(len(xyz_after))
+    # xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=0.1, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
     # xyz_after = STG50F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
+
+    # OP. 切り取り攻撃（不可視性評価はコメントアウト）
+    xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
 
     # 4. 抽出処理
     print("\n--- 抽出処理開始 ---")
@@ -101,8 +98,7 @@ if __name__ == "__main__":
     print(pcd_after)
     
     # 不可視性の評価 (オリジナルの評価関数を流用)
-    STG50F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-
+    # STG50F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
     

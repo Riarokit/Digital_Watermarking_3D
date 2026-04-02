@@ -10,7 +10,7 @@ GFT係数の分布を可視化する
 
 def check_spectrum():
     # 1. データ準備
-    input_file = "C:/dragon_vrip_res2.ply"
+    input_file = "C:/bun_zipper.ply"
     if os.path.exists(input_file):
         pcd = o3d.io.read_point_cloud(input_file)
     else:
@@ -28,6 +28,10 @@ def check_spectrum():
     noise = rng.normal(0, noise_param * np.mean(np.linalg.norm(xyz_orig, axis=1)), xyz_orig.shape)
     xyz_noise = xyz_orig + noise
     xyz_smooth = STG50F.smoothing_attack(xyz_orig, lambda_val=0.05, iterations=100, k=6)
+
+    # 抽出時の同期（インデックス対応付け）エラーを再現する
+    xyz_noise = STG50F.synchronize_point_cloud(xyz_noise, xyz_orig, verbose=False)
+    xyz_smooth = STG50F.synchronize_point_cloud(xyz_smooth, xyz_orig, verbose=False)
 
     # 周波数ごとのエネルギー蓄積用
     # 周波数を 0.0~1.0 に正規化し、例えば 50 ビンで平均をとる

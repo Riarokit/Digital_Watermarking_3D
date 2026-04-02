@@ -41,8 +41,8 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon_vrip_res2.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"
@@ -84,16 +84,13 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=2.0, mode='gaussian', seed=42)
-
-    # OP. 切り取り攻撃
-    # xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.3, mode='axis', axis=0)
-    # # xyz_after = STG50F.reconstruct_point_cloud(xyz_after, xyz, threshold=max_embed_shift*2)
-    # xyz_after = STG50F.reorder_point_cloud(xyz_after, xyz)
-    # print(len(xyz_after))
+    # xyz_after = STG50F.noise_addition_attack(xyz_after, noise_percent=0.75, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = STG50F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
+    xyz_after = STG50F.smoothing_attack(xyz_after, lambda_val=0.2, iterations=30, k=6)
+
+    # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
+    # xyz_after = STG50F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
 
     # 6. 単多数決方式の抽出
     start = time.time()
@@ -108,7 +105,7 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    STG50F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
+    # STG50F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
 
     # 8. 確認用
     o3d.visualization.draw_geometries([pcd_after])

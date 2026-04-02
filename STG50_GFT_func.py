@@ -812,6 +812,7 @@ def extract_watermark_xyz(
     graph_mode='knn', k=10, radius=0.05,
     split_mode=0, min_spectre=0.0, max_spectre=1.0
 ):
+    xyz_emb = synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
     if split_mode == 0:
         skip_threshold = embed_bits_length/2
         bit_lists = [[] for _ in range(embed_bits_length)]
@@ -1011,6 +1012,7 @@ def extract_watermark_xyz_check(
     xyz_emb, xyz_orig, labels, watermark_bits_length, checked_bits_length,
     split_mode=0, error_correction="none"
 ):  
+    xyz_emb = synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
     total_checks = 0
     passed_checks = 0
     successrate_list = []
@@ -1285,6 +1287,7 @@ def extract_watermark_normal(
     """
     s_i = <p_i, n_i> を用いて、GFT係数差分の符号でビット抽出（多数決）。
     """
+    xyz_emb = synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
     skip_threshold = embed_bits_length / 2
     bit_lists = [[] for _ in range(embed_bits_length)]
 
@@ -1462,6 +1465,7 @@ def extract_watermark_pseudoplane(
     - 疑似平面推定は xyz_orig（埋め込み前）で行う（xyz_embで推定すると透かし変位が平面推定に混入する）。
     - グラフも xyz_orig（クラスタ内座標）で構築する（埋め込み前と一致させる）。
     """
+    xyz_emb = synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
     if embed_bits_length <= 0:
         return []
 
@@ -1482,7 +1486,7 @@ def extract_watermark_pseudoplane(
         if len(pts_orig) != len(pts_emb):
             continue
 
-        # 疑似平面は必ずorigから
+        # 疑似平面はorigから
         centroid, normal = compute_pseudoplane_pca(pts_orig)
 
         # 高さ信号（orig/emb）
@@ -1505,8 +1509,7 @@ def extract_watermark_pseudoplane(
 
         n_repeat = Q_extract // embed_bits_length if embed_bits_length > 0 else 1
 
-        # 既存extractの投票構造を踏襲
-        # まず「ブロック繰り返し分」
+        # ブロック繰り返し分
         for bit_idx in range(embed_bits_length):
             for rep in range(n_repeat):
                 i = bit_idx * n_repeat + rep
@@ -1739,6 +1742,8 @@ def extract_watermark_pseudoplane_multicluster(
     - 各slotの差分符号を “そのslotが担当するbit番号” に投票
     - 最後にbitごと多数決
     """
+    xyz_emb = synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
+    
     if embed_bits_length <= 0:
         return []
 
@@ -2147,52 +2152,29 @@ def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
         
     return xyz_smooth
 
-def reconstruct_point_cloud(xyz_after, xyz_orig, threshold=0.01, verbose=True):
+def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
     """
-    欠損した点を元点群（xyz_orig）から復元して返す。
-
-    Parameters:
-    - xyz_after (np.ndarray): 攻撃後の点群
-    - xyz_orig (np.ndarray): 元点群（完全版）
-    - threshold (float): 一致判定の距離しきい値
-    - verbose (bool): ログ表示有無
-
-    Returns:
-    - xyz_reconstructed (np.ndarray): 点が補完されたxyz_after
+    攻撃後点群をオリジナル点群と完全に同期（同じ点数・順序）させる。
     """
-    tree = cKDTree(xyz_after)
-    dists, _ = tree.query(xyz_orig, k=1)
-    missing_mask = dists > threshold
-    missing_points = xyz_orig[missing_mask]
-    xyz_reconstructed = np.vstack([xyz_after, missing_points])
+    if distance_threshold is None:
+        max_bound = np.max(xyz_orig, axis=0)
+        min_bound = np.min(xyz_orig, axis=0)
+        scale = np.linalg.norm(max_bound - min_bound)
+        distance_threshold = scale * 0.01
+
+    tree = cKDTree(xyz_att)
+    dists, indices = tree.query(xyz_orig, k=1)
+    
+    xyz_synced = xyz_att[indices].copy()
+    
+    missing_mask = dists > distance_threshold
+    xyz_synced[missing_mask] = xyz_orig[missing_mask]
     
     if verbose:
-        print(f"[Reconstruction] 復元された点数: {len(missing_points)} / {len(xyz_orig)}")
-        print("再構成後xyzのshape:", xyz_reconstructed.shape)
-        print("距離の最小:", np.min(dists))
-        print("距離の最大:", np.max(dists))
-        print("平均距離:", np.mean(dists))
-    return xyz_reconstructed
+        n_missing = np.sum(missing_mask)
+        print(f"[Sync] 再サンプリング完了。補完された欠損点数: {n_missing} / {len(xyz_orig)}")
 
-def reorder_point_cloud(xyz_after, xyz_orig, verbose=True):
-    """
-    xyz_afterの順番を、xyz_origと最も近い点で対応づけて並び替える。
-
-    Parameters:
-    - xyz_after (np.ndarray): 復元後点群（点数 = xyz_orig以上）
-    - xyz_orig (np.ndarray): 元点群（基準順）
-
-    Returns:
-    - xyz_reordered (np.ndarray): 並べ替え後の点群（xyz_origと順序一致）
-    """
-    tree = cKDTree(xyz_after)
-    _, indices = tree.query(xyz_orig, k=1)
-    xyz_reordered = xyz_after[indices]
-
-    if verbose:
-        print(f"[Reorder] 順序を xyz_orig に再整列しました。")
-
-    return xyz_reordered
+    return xyz_synced
 
 # =========================================================
 #  参考関数群
@@ -2223,6 +2205,16 @@ def greedy_cluster_points(xyz, num_clusters=8, seed=42):
         clusters[c].append(s)
         cluster_labels[s] = c
         unassigned.remove(s)
+    for c in range(num_clusters):
+        while len(clusters[c]) < cluster_sizes[c]:
+            last = clusters[c][-1]
+            available = np.array(list(unassigned))
+            dists = np.linalg.norm(xyz[available] - xyz[last], axis=1)
+            next_idx = available[np.argmin(dists)]
+            clusters[c].append(next_idx)
+            cluster_labels[next_idx] = c
+            unassigned.remove(next_idx)
+    return cluster_labels(s)
     for c in range(num_clusters):
         while len(clusters[c]) < cluster_sizes[c]:
             last = clusters[c][-1]
