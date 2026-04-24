@@ -80,7 +80,7 @@ if __name__ == "__main__":
     # xyz_after = DW1F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
 
     # OP. 切り取り攻撃（不可視性評価はコメントアウト）
-    xyz_after = DW1F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
+    # xyz_after = DW1F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
 
     # 4. 抽出処理
     print("\n--- 抽出処理開始 ---")
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     # 不可視性の評価 (オリジナルの評価関数を流用)
     # DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
     print("--- 視覚的品質評価 (SSIM) ---")
-    DW1F.evaluate_ssim(pcd_before, pcd_after)
+    DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
     

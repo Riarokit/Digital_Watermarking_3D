@@ -107,7 +107,7 @@ if __name__ == "__main__":
     print(pcd_after)
     # DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
     print("--- 視覚的品質評価 (SSIM) ---")
-    DW1F.evaluate_ssim(pcd_before, pcd_after)
+    DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
 
     # 8. 確認用
     o3d.visualization.draw_geometries([pcd_after])
