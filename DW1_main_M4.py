@@ -25,9 +25,9 @@ if __name__ == "__main__":
     # 画像サイズn×n
     n = 16
     # 埋め込み強度
-    beta = 1.3e-3
+    beta = 3.6e-3
     # 1クラスタあたりの点数目安(k-means用)
-    cluster_point = 500
+    cluster_point = 2000
     # グラフ構築モード
     graph_mode = 'knn'
     k = 6
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 周波数帯域アプローチ
-    min_spectre = 0.0
+    min_spectre = 0.8
     max_spectre = 1.0
     
 
@@ -105,8 +105,7 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    # DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-    print("--- 視覚的品質評価 (SSIM) ---")
+    DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
     DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
 
     # 8. 確認用

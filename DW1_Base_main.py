@@ -24,7 +24,7 @@ if __name__ == "__main__":
     n_points = n * n  # 埋め込む頂点数（1頂点につき1ビット）
     
     # 透かしの埋め込み強度
-    a = 0.004
+    a = 2.66e-3
     
     # 近傍点数k
     k = 6
@@ -97,17 +97,13 @@ if __name__ == "__main__":
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
     
-    # 不可視性の評価 (オリジナルの評価関数を流用)
-    # DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-    print("--- 視覚的品質評価 (SSIM) ---")
+    DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
     DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
     
-    # 頑健性（ビット誤り率）の評価と画像の復元
     DW1F.evaluate_robustness(watermark_bits, extracted_bits)
     DW1F.bitarray_to_image(extracted_bits, n=n, save_path="baseline_recovered.bmp")
-    
     print(f"埋込時間: {embed_time:.2f}秒")
     print(f"抽出時間: {extract_time:.2f}秒\n")
     
