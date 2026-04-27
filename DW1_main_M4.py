@@ -106,7 +106,9 @@ if __name__ == "__main__":
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
     DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-    DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
+    # DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
+    DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
+    DW1F.evaluate_point_ssim(pcd_before, pcd_after)
 
     # 8. 確認用
     o3d.visualization.draw_geometries([pcd_after])

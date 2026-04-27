@@ -98,7 +98,9 @@ if __name__ == "__main__":
     print(pcd_after)
     
     DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-    DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
+    # DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
+    DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
+    DW1F.evaluate_point_ssim(pcd_before, pcd_after)
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
     

@@ -1308,6 +1308,150 @@ def evaluate_ssim(pcd_before, pcd_after, point_size=5.0, verbose=True, save_dir=
         print(f"SSIM (Multi-view): {final_score:.4f}")
     return final_score
 
+def compute_local_curvature(xyz, k=12):
+    """
+    各点の局所曲率を計算します。
+    近傍点(k)の共分散行列の固有値から曲率（最小固有値 / 固有値の和）を推定します。
+    """
+    from scipy.spatial import cKDTree
+    tree = cKDTree(xyz)
+    _, idxs = tree.query(xyz, k=k)
+    curvatures = np.zeros(len(xyz))
+    for i, neighbors in enumerate(idxs):
+        pts = xyz[neighbors]
+        mean = np.mean(pts, axis=0)
+        cov = np.cov((pts - mean).T)
+        try:
+            eigvals = np.linalg.eigvalsh(cov)
+            eigvals = np.clip(eigvals, 0, None)
+            sum_eig = np.sum(eigvals)
+            if sum_eig == 0:
+                curvatures[i] = 0
+            else:
+                curvatures[i] = eigvals[0] / sum_eig
+        except np.linalg.LinAlgError:
+            curvatures[i] = 0
+    return curvatures
+
+def evaluate_pc_msdm(pcd_before, pcd_after, k=12, m=3, verbose=True):
+    """
+    PC-MSDM (Point Cloud Multi-Scale Distortion Metric) を模した客観的品質評価指標。
+    各点の局所近傍内で曲率の平均と分散を計算し、点ごとにSSIMを算出します。
+    その後、Minkowski Poolingにより最終スコアを計算します。
+    1.0に近いほど品質が高く（歪みが少ない）、0.0に近いほど品質が低いことを示します。
+    """
+    xyz_b = np.asarray(pcd_before.points)
+    xyz_a = np.asarray(pcd_after.points)
+    
+    # 全点の曲率を事前計算
+    curv_b_all = compute_local_curvature(xyz_b, k)
+    curv_a_all = compute_local_curvature(xyz_a, k)
+    
+    from scipy.spatial import cKDTree
+    tree_b = cKDTree(xyz_b)
+    tree_a = cKDTree(xyz_a)
+    
+    # オリジナルと透かし入りの対応点探索 (before -> after)
+    _, idxs_b2a = tree_a.query(xyz_b, k=1)
+    
+    # 各点の局所近傍インデックスを取得
+    _, nbrs_b = tree_b.query(xyz_b, k=k)
+    xyz_a_matched = xyz_a[idxs_b2a]
+    _, nbrs_a = tree_a.query(xyz_a_matched, k=k)
+    
+    # 局所ウィンドウ内の曲率を取得
+    patch_curv_b = curv_b_all[nbrs_b] # (N, k)
+    patch_curv_a = curv_a_all[nbrs_a] # (N, k)
+    
+    mu_b = np.mean(patch_curv_b, axis=1)
+    mu_a = np.mean(patch_curv_a, axis=1)
+    sigma_b_sq = np.var(patch_curv_b, axis=1)
+    sigma_a_sq = np.var(patch_curv_a, axis=1)
+    
+    # 共分散計算のためソート
+    patch_curv_b_sorted = np.sort(patch_curv_b, axis=1)
+    patch_curv_a_sorted = np.sort(patch_curv_a, axis=1)
+    cov_ab = np.mean((patch_curv_b_sorted - mu_b[:, None]) * (patch_curv_a_sorted - mu_a[:, None]), axis=1)
+    
+    c1 = (0.01) ** 2
+    c2 = (0.03) ** 2
+    
+    l_comp = (2 * mu_b * mu_a + c1) / (mu_b**2 + mu_a**2 + c1)
+    s_comp = (2 * cov_ab + c2) / (sigma_b_sq + sigma_a_sq + c2)
+    local_ssim = l_comp * s_comp
+    
+    # Minkowski Pooling
+    distortions = 1.0 - local_ssim
+    distortions = np.clip(distortions, 0, None)
+    l_minkowski = np.mean(distortions ** m) ** (1.0 / m)
+    final_score = 1.0 - l_minkowski
+    
+    if verbose:
+        print(f"PC-MSDM (Local Curvature & Minkowski p={m}): {final_score:.4f}")
+    return final_score
+
+def evaluate_point_ssim(pcd_before, pcd_after, k=12, m=3, verbose=True):
+    """
+    PointSSIM を幾何属性に適用した厳密な局所評価指標。
+    各点のk近傍における局所平均・分散を計算し、点ごとにSSIMを算出した後、
+    Minkowski Poolingにより最終スコアを計算します。
+    1.0に近いほど品質が高く、0.0に近いほど品質が低いことを示します。
+    """
+    xyz_b = np.asarray(pcd_before.points)
+    xyz_a = np.asarray(pcd_after.points)
+    
+    from scipy.spatial import cKDTree
+    tree_b = cKDTree(xyz_b)
+    tree_a = cKDTree(xyz_a)
+    
+    # オリジナルと透かし入りの対応点探索 (before -> after)
+    _, idxs_b2a = tree_a.query(xyz_b, k=1)
+    
+    # 近傍点の探索
+    _, nbrs_b = tree_b.query(xyz_b, k=k)
+    # 対応する after の点に対する近傍探索
+    xyz_a_matched = xyz_a[idxs_b2a]
+    _, nbrs_a = tree_a.query(xyz_a_matched, k=k)
+    
+    # 属性計算（局所近傍内の「中心点からの距離」を属性とする）
+    diff_b = xyz_b[nbrs_b] - xyz_b[:, None, :] # (N, k, 3)
+    dist_b = np.linalg.norm(diff_b, axis=2)    # (N, k)
+    mu_b = np.mean(dist_b, axis=1)             # (N,)
+    sigma_b_sq = np.var(dist_b, axis=1)        # (N,)
+    
+    # A側 (マッチした点について)
+    diff_a = xyz_a[nbrs_a] - xyz_a_matched[:, None, :]
+    dist_a = np.linalg.norm(diff_a, axis=2)
+    mu_a = np.mean(dist_a, axis=1)
+    sigma_a_sq = np.var(dist_a, axis=1)
+    
+    # 共分散計算のためソート
+    dist_b_sorted = np.sort(dist_b, axis=1)
+    dist_a_sorted = np.sort(dist_a, axis=1)
+    cov_ab = np.mean((dist_b_sorted - mu_b[:, None]) * (dist_a_sorted - mu_a[:, None]), axis=1)
+    
+    # 安定化定数
+    dyn_range = np.max(dist_b) - np.min(dist_b)
+    if dyn_range == 0:
+        dyn_range = 1e-5
+    c1 = (0.01 * dyn_range) ** 2
+    c2 = (0.03 * dyn_range) ** 2
+    
+    # 点ごとのSSIM計算
+    l_comp = (2 * mu_b * mu_a + c1) / (mu_b**2 + mu_a**2 + c1)
+    s_comp = (2 * cov_ab + c2) / (sigma_b_sq + sigma_a_sq + c2)
+    local_ssim = l_comp * s_comp
+    
+    # Minkowski Pooling
+    distortions = 1.0 - local_ssim
+    distortions = np.clip(distortions, 0, None)
+    l_minkowski = np.mean(distortions ** m) ** (1.0 / m)
+    final_score = 1.0 - l_minkowski
+    
+    if verbose:
+        print(f"PointSSIM (Local Geometry & Minkowski p={m}): {final_score:.4f}")
+    return final_score
+
 # =========================================================
 #  攻撃関数群
 # =========================================================
