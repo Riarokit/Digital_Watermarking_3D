@@ -24,7 +24,8 @@ if __name__ == "__main__":
     n_points = n * n  # 埋め込む頂点数（1頂点につき1ビット）
     
     # 透かしの埋め込み強度
-    a = 2.66e-3
+    # a = 2.66e-3 #Bunny用
+    a = 3.56e-3 #Dragon用
     
     # 近傍点数k
     k = 6
@@ -32,15 +33,13 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon_vrip_res2.ply"
+    # input_file = "C:/bun_zipper.ply"
+    input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"
     
-    print("--- データの読み込みと前処理 ---")
     pcd_before = o3d.io.read_point_cloud(input_file)
-
     # 前処理（正規化、色情報の追加）
     pcd_before = DW1F.normalize_point_cloud(pcd_before)
     pcd_before = DW1F.add_colors(pcd_before, color="grad")
@@ -57,7 +56,6 @@ if __name__ == "__main__":
     pcd_after = o3d.geometry.PointCloud()
 
     # 3. 埋め込み処理
-    print("\n--- 埋め込み処理開始 ---")
     start_embed = time.time()
     try:
         xyz_after = DW1B.embed_watermark_baseline(
@@ -83,7 +81,6 @@ if __name__ == "__main__":
     # xyz_after = DW1F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
 
     # 4. 抽出処理
-    print("\n--- 抽出処理開始 ---")
     start_extract = time.time()
     extracted_bits = DW1B.extract_watermark_baseline(
         xyz_after, xyz, 
@@ -92,13 +89,11 @@ if __name__ == "__main__":
     extract_time = time.time() - start_extract
 
     # 5. 評価結果出力
-    print("\n--- 評価結果 ---")
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
     
     DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-    # DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
     DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
     DW1F.evaluate_point_ssim(pcd_before, pcd_after)
     print(f"埋込ビット長：{len(watermark_bits)}")

@@ -25,7 +25,10 @@ if __name__ == "__main__":
     # 画像サイズn×n
     n = 16
     # 埋め込み強度
-    beta = 3.6e-3
+    # beta = 1.6e-3 #Bunny全周波用
+    beta = 3.6e-3 #Bunnyその他用
+    # beta = 1.3e-3 #Dragon全周波用
+    # beta = 2.9e-3 #Dragonその他用
     # 1クラスタあたりの点数目安(k-means用)
     cluster_point = 2000
     # グラフ構築モード
@@ -35,8 +38,8 @@ if __name__ == "__main__":
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 周波数帯域アプローチ
-    min_spectre = 0.8
-    max_spectre = 1.0
+    min_spectre = 0.0
+    max_spectre = 0.2
     
 
     # 1. データ取得
@@ -106,12 +109,11 @@ if __name__ == "__main__":
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
     DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-    # DW1F.evaluate_ssim(pcd_before, pcd_after, save_dir="ssim_out")
     DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
     DW1F.evaluate_point_ssim(pcd_before, pcd_after)
 
     # 8. 確認用
-    # o3d.visualization.draw_geometries([pcd_after])
+    o3d.visualization.draw_geometries([pcd_after])
     print(f"埋込ビット：{len(watermark_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
     DW1F.evaluate_robustness(watermark_bits, extracted_bits)

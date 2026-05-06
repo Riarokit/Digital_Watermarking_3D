@@ -9,8 +9,8 @@ import os
 # ==========================================
 # --- 共通＆入出力設定 ---
 TARGET_PSNR = 60.0                           # 目標とするPSNR (dB) 【※埋め込み直後・攻撃前の視覚品質】
-INPUT_FILE = "C:/bun_zipper.ply"             # 対象の点群データ
-# INPUT_FILE = "C:/dragon_vrip_res2.ply"
+# INPUT_FILE = "C:/bun_zipper.ply"             # 対象の点群データ
+INPUT_FILE = "C:/dragon_vrip_res2.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 # INPUT_FILE = "C:/longdress_vox12.ply"
 # INPUT_FILE = "C:/soldier_vox12.ply"
@@ -19,8 +19,8 @@ WATERMARK_SIZE = 16                           # 埋め込む画像のサイズ (
 
 # --- 攻撃に関する設定 ---
 ATTACKS = [
-    # ("noise", [0.2, 0.4, 0.6, 0.8, 1.0]),
-    # ("smoothing", [5, 10, 20, 30]),
+    ("noise", [0.2, 0.4, 0.6, 0.8, 1.0]),
+    ("smoothing", [5, 10, 20, 30]),
     ("cropping", [0.9, 0.7, 0.5, 0.3])
 ]
 NUM_TRIALS = 5                               # 各攻撃条件ごとのテスト試行回数（平均BERを算出するため）

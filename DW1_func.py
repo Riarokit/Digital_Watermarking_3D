@@ -1214,107 +1214,11 @@ def evaluate_robustness(watermark_bits, extracted_bits, verbose=True):
         
     return corr, ber
 
-def _capture_pcd_for_ssim(pcd, filename, point_size):
-    import time
-    vis = o3d.visualization.Visualizer()
-    vis.create_window(visible=False, width=800, height=800)
-    vis.add_geometry(pcd)
-    
-    opt = vis.get_render_option()
-    opt.background_color = np.asarray([0, 0, 0])
-    opt.point_size = point_size
-    opt.light_on = True # 照明をオンにして凹凸による色の変化(陰影)を捉える
-    
-    ctr = vis.get_view_control()
-    ctr.set_zoom(0.8)
-    
-    vis.poll_events()
-    vis.update_renderer()
-    time.sleep(0.2) # レンダリング完了待ち
-    vis.capture_screen_image(filename)
-    vis.destroy_window()
-
-def evaluate_ssim(pcd_before, pcd_after, point_size=5.0, verbose=True, save_dir=None):
-    """
-    点群の視覚的品質(構造的類似度)を2Dレンダリング(マルチビュー)経由で評価します。
-    色と照明状態を含めたレンダリング結果の画像に対してマスク処理を行い計算します。
-    """
-    try:
-        from skimage.metrics import structural_similarity as compute_ssim
-        import cv2
-    except ImportError:
-        if verbose:
-            print("[SSIM] scikit-image または opencv-python がインストールされていません。")
-        return None
-
-    scores = []
-    
-    # 6方向（前後左右上下）の回転角を定義
-    angles = [
-        (0, 0, 0),             # 正面
-        (0, np.pi, 0),         # 背面
-        (0, np.pi/2, 0),       # 右
-        (0, -np.pi/2, 0),      # 左
-        (np.pi/2, 0, 0),       # 上
-        (-np.pi/2, 0, 0)       # 下
-    ]
-    
-    import os
-    if save_dir:
-        os.makedirs(save_dir, exist_ok=True)
-        
-    for i, (rx, ry, rz) in enumerate(angles):
-        if save_dir:
-            img_b_path = os.path.join(save_dir, f"view_{i}_original.png")
-            img_a_path = os.path.join(save_dir, f"view_{i}_watermark.png")
-        else:
-            img_b_path = f"temp_before_{i}.png"
-            img_a_path = f"temp_after_{i}.png"
-        
-        # オリジナルの点群を回転させて撮影
-        pcd_b_rot = copy.deepcopy(pcd_before)
-        center = pcd_b_rot.get_center()
-        R = pcd_b_rot.get_rotation_matrix_from_xyz((rx, ry, rz))
-        pcd_b_rot.rotate(R, center=center)
-        pcd_b_rot.estimate_normals() # 照明計算用に法線を更新
-        _capture_pcd_for_ssim(pcd_b_rot, img_b_path, point_size)
-        
-        # 透かし入りの点群を同様に回転させて撮影
-        pcd_a_rot = copy.deepcopy(pcd_after)
-        pcd_a_rot.rotate(R, center=center)
-        pcd_a_rot.estimate_normals() # 照明計算用に法線を更新
-        _capture_pcd_for_ssim(pcd_a_rot, img_a_path, point_size)
-        
-        img_b = cv2.imread(img_b_path, cv2.IMREAD_GRAYSCALE)
-        img_a = cv2.imread(img_a_path, cv2.IMREAD_GRAYSCALE)
-        
-        # 両方とも黒(背景)でないピクセルをマスクとして抽出
-        mask = (img_b > 0) | (img_a > 0)
-        
-        if np.any(mask):
-            # SSIMマップ全体を計算
-            score, diff = compute_ssim(img_b, img_a, full=True)
-            # マスク領域のみの平均を計算
-            score_masked = np.mean(diff[mask])
-            scores.append(score_masked)
-        
-        # 保存先が指定されていない場合は中間ファイルを削除
-        if not save_dir:
-            if os.path.exists(img_b_path): os.remove(img_b_path)
-            if os.path.exists(img_a_path): os.remove(img_a_path)
-
-    final_score = np.mean(scores) if scores else 0.0
-    if verbose:
-        print(f"SSIM (Multi-view): {final_score:.4f}")
-    return final_score
-
 def extract_surface_info(xyz, k=6):
     """
     点群の各点においてPCAを用いて近似接平面と2次曲面をフィッティングし、
     その係数と局所座標系（フレーム）を抽出します。
     """
-    from scipy.spatial import cKDTree
-    import numpy as np
 
     tree = cKDTree(xyz)
     _, idxs = tree.query(xyz, k=k)
@@ -1365,8 +1269,6 @@ def _compute_msdm_directional(xyz_source, xyz_target, info_source, info_target, 
     """
     一方向 (source -> target) の局所歪み(LD)を計算します。
     """
-    import numpy as np
-    from scipy.spatial import cKDTree
     
     _, idxs_closest = tree_target.query(xyz_source, k=1)
     
@@ -1441,8 +1343,6 @@ def evaluate_pc_msdm(pcd_before, pcd_after, k=6, m=2, verbose=True):
     および対称性のすべての要件を含みます。
     ※ 2次曲面フィッティングの近傍点数として引数kを使用します。
     """
-    import numpy as np
-    from scipy.spatial import cKDTree
     
     xyz_ref = np.asarray(pcd_before.points)
     xyz_dist = np.asarray(pcd_after.points)
@@ -1478,66 +1378,135 @@ def evaluate_pc_msdm(pcd_before, pcd_after, k=6, m=2, verbose=True):
         print(f"PC-MSDM (Original Paper eq, sym, p={m}): {final_score:.4f} (Raw Distortion={symmetric_distortion:.4f})")
     return final_score
 
-def evaluate_point_ssim(pcd_before, pcd_after, k=6, m=2, verbose=True):
+def evaluate_point_ssim(pcd_before, pcd_after, attribute='geometry', dispersion='variance', k=6, m=2, epsilon=None, verbose=True):
     """
-    PointSSIM を幾何属性に適用した厳密な局所評価指標。
-    各点のk近傍における局所平均・分散を計算し、点ごとにSSIMを算出した後、
-    Minkowski Poolingにより最終スコアを計算します。
-    1.0に近いほど品質が高く、0.0に近いほど品質が低いことを示します。
+    PointSSIM (Point Cloud Structural Similarity) 評価指標。
+    論文: "PointSSIM: A Structural Similarity Index for Point Clouds" に基づく。
+    
+    Parameters:
+    - pcd_before: 参照点群 (X)
+    - pcd_after: 評価対象点群 (Y)
+    - attribute: 'geometry', 'normals', 'curvature', 'colors' のいずれか
+    - dispersion: 'variance', 'cov', 'muad', 'mad', 'qcd' のいずれか
+    - k: 近傍点の数 (Neighborhood size)
+    - m: プーリングパラメータ (論文中の Equation 6 の k。デフォルトはMSE相当の2)
+    - epsilon: ゼロ除算回避のための定数 (Noneなら機械イプシロン)
+    - verbose: ログ出力
+    
+    Returns:
+    - final_score: 品質スコア (1.0 に近いほど高品質=類似度が高い)
     """
+    
+    if epsilon is None:
+        epsilon = np.finfo(float).eps
+
     xyz_b = np.asarray(pcd_before.points)
     xyz_a = np.asarray(pcd_after.points)
     
-    from scipy.spatial import cKDTree
     tree_b = cKDTree(xyz_b)
     tree_a = cKDTree(xyz_a)
     
-    # オリジナルと透かし入りの対応点探索 (before -> after)
-    _, idxs_b2a = tree_a.query(xyz_b, k=1)
+    # 評価点群（A）から参照点群（B）への対応点を探索
+    # Y(A) の各点 p に対して X(B) の最近傍 q を見つける
+    _, idxs_a2b = tree_b.query(xyz_a, k=1) 
     
-    # 近傍点の探索
+    # 近傍の取得 (Aの各点、および、Bの各点)
+    _, nbrs_a = tree_a.query(xyz_a, k=k)
     _, nbrs_b = tree_b.query(xyz_b, k=k)
-    # 対応する after の点に対する近傍探索
-    xyz_a_matched = xyz_a[idxs_b2a]
-    _, nbrs_a = tree_a.query(xyz_a_matched, k=k)
+
+    def compute_attribute(pcd, xyz, nbrs, attr_type):
+        N = xyz.shape[0]
+        if attr_type == 'geometry':
+            # ユークリッド距離
+            diff = xyz[nbrs] - xyz[:, None, :] # (N, k, 3)
+            dist = np.linalg.norm(diff, axis=2) # (N, k)
+            return dist
+        elif attr_type == 'normals':
+            # 法線ベクトルの角度類似度
+            if not pcd.has_normals():
+                pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=max(10, k)))
+                pcd.orient_normals_consistent_tangent_plane(max(10, k))
+            norms = np.asarray(pcd.normals)
+            norms_center = norms[:, None, :] # (N, 1, 3)
+            norms_nbrs = norms[nbrs]         # (N, k, 3)
+            # 内積をとることで類似度を計算
+            sim = np.sum(norms_center * norms_nbrs, axis=2) # (N, k)
+            return sim
+        elif attr_type == 'curvature':
+            # 曲率
+            info = extract_surface_info(xyz, k=max(6, k))
+            curvs = info['curvatures'] # (N,)
+            return curvs[nbrs] # (N, k)
+        elif attr_type == 'colors':
+            if not pcd.has_colors():
+                raise ValueError("PointCloud does not have colors for the 'colors' attribute.")
+            colors = np.asarray(pcd.colors)
+            # RGB to Luminance
+            luminance = np.dot(colors, [0.2989, 0.5870, 0.1140])
+            return luminance[nbrs] # (N, k)
+        else:
+            raise ValueError(f"Unknown attribute: {attr_type}")
+
+    def compute_dispersion(attr_array, disp_type):
+        # attr_array: (N, k)
+        if disp_type == 'variance':
+            return np.var(attr_array, axis=1) # (N,)
+        elif disp_type == 'cov':
+            mu = np.mean(attr_array, axis=1)
+            sigma = np.std(attr_array, axis=1)
+            return np.divide(sigma, mu, out=np.zeros_like(sigma), where=mu!=0)
+        elif disp_type == 'muad':
+            # Mean Absolute Deviation
+            mu = np.mean(attr_array, axis=1, keepdims=True)
+            return np.mean(np.abs(attr_array - mu), axis=1)
+        elif disp_type == 'mad':
+            # Median Absolute Deviation
+            med = np.median(attr_array, axis=1, keepdims=True)
+            return np.mean(np.abs(attr_array - med), axis=1)
+        elif disp_type == 'qcd':
+            # Quartile Coefficient of Dispersion
+            q1 = np.percentile(attr_array, 25, axis=1)
+            q3 = np.percentile(attr_array, 75, axis=1)
+            denom = q3 + q1
+            return np.divide(q3 - q1, denom, out=np.zeros_like(denom), where=denom!=0)
+        else:
+            raise ValueError(f"Unknown dispersion type: {disp_type}")
+
+    # 属性の取得
+    attr_a = compute_attribute(pcd_after, xyz_a, nbrs_a, attribute)
+    attr_b = compute_attribute(pcd_before, xyz_b, nbrs_b, attribute)
+
+    # 特徴量(ばらつき統計量)の抽出
+    F_a = compute_dispersion(attr_a, dispersion) # A(Y)の特徴量
+    F_b = compute_dispersion(attr_b, dispersion) # B(X)の特徴量
+
+    # 1. 評価対象A (Distorted) から参照B (Reference) への誤差
+    # Aの各点 p に対して Bの最近傍 q = idxs_a2b[p]
+    F_b_matched = F_b[idxs_a2b]
+    diff_a2b = np.abs(F_b_matched - F_a)
+    denom_a2b = np.maximum(np.abs(F_b_matched), np.abs(F_a)) + epsilon
+    S_a2b_p = diff_a2b / denom_a2b
+    # Equation 6 による Error pooling (指数の Root はとらない)
+    error_a2b = np.mean(S_a2b_p ** m)
+
+    # 2. 参照B (Reference) から評価対象A (Distorted) への誤差
+    # Bの各点 p に対して Aの最近傍 q = idxs_b2a[p]
+    _, idxs_b2a = tree_a.query(xyz_b, k=1) 
+    F_a_matched = F_a[idxs_b2a]
+    diff_b2a = np.abs(F_a_matched - F_b)
+    denom_b2a = np.maximum(np.abs(F_a_matched), np.abs(F_b)) + epsilon
+    S_b2a_p = diff_b2a / denom_b2a
+    # Equation 6 による Error pooling (指数の Root はとらない)
+    error_b2a = np.mean(S_b2a_p ** m)
+
+    # 対称誤差(Symmetric Error)として、2つの非対称スコアの「最小値(Minimum)」を採用する
+    error_sym = min(error_a2b, error_b2a)
     
-    # 属性計算（局所近傍内の「中心点からの距離」を属性とする）
-    diff_b = xyz_b[nbrs_b] - xyz_b[:, None, :] # (N, k, 3)
-    dist_b = np.linalg.norm(diff_b, axis=2)    # (N, k)
-    mu_b = np.mean(dist_b, axis=1)             # (N,)
-    sigma_b_sq = np.var(dist_b, axis=1)        # (N,)
-    
-    # A側 (マッチした点について)
-    diff_a = xyz_a[nbrs_a] - xyz_a_matched[:, None, :]
-    dist_a = np.linalg.norm(diff_a, axis=2)
-    mu_a = np.mean(dist_a, axis=1)
-    sigma_a_sq = np.var(dist_a, axis=1)
-    
-    # 共分散計算のためソート
-    dist_b_sorted = np.sort(dist_b, axis=1)
-    dist_a_sorted = np.sort(dist_a, axis=1)
-    cov_ab = np.mean((dist_b_sorted - mu_b[:, None]) * (dist_a_sorted - mu_a[:, None]), axis=1)
-    
-    # 安定化定数
-    dyn_range = np.max(dist_b) - np.min(dist_b)
-    if dyn_range == 0:
-        dyn_range = 1e-5
-    c1 = (0.01 * dyn_range) ** 2
-    c2 = (0.03 * dyn_range) ** 2
-    
-    # 点ごとのSSIM計算
-    l_comp = (2 * mu_b * mu_a + c1) / (mu_b**2 + mu_a**2 + c1)
-    s_comp = (2 * cov_ab + c2) / (sigma_b_sq + sigma_a_sq + c2)
-    local_ssim = l_comp * s_comp
-    
-    # Minkowski Pooling
-    distortions = 1.0 - local_ssim
-    distortions = np.clip(distortions, 0, None)
-    l_minkowski = np.mean(distortions ** m) ** (1.0 / m)
-    final_score = 1.0 - l_minkowski
+    # 品質スコア化（1に近いほど高品質）
+    final_score = np.clip(1.0 - error_sym, 0.0, 1.0)
     
     if verbose:
-        print(f"PointSSIM (Local Geometry & Minkowski p={m}): {final_score:.4f}")
+        print(f"PointSSIM (attr={attribute}, disp={dispersion}, m={m}): {final_score:.4f} (error_sym={error_sym:.4f})")
     return final_score
 
 # =========================================================
