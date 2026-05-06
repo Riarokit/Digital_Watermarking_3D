@@ -24,8 +24,8 @@ if __name__ == "__main__":
     n_points = n * n  # 埋め込む頂点数（1頂点につき1ビット）
     
     # 透かしの埋め込み強度
-    # a = 2.66e-3 #Bunny用
-    a = 3.56e-3 #Dragon用
+    a = 2.66e-3 #Bunny用
+    # a = 3.56e-3 #Dragon用
     
     # 近傍点数k
     k = 6
@@ -33,8 +33,8 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon_vrip_res2.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"

@@ -1269,7 +1269,7 @@ def _compute_msdm_directional(xyz_source, xyz_target, info_source, info_target, 
     """
     一方向 (source -> target) の局所歪み(LD)を計算します。
     """
-    
+
     _, idxs_closest = tree_target.query(xyz_source, k=1)
     
     curv_source = info_source['curvatures']
@@ -1378,7 +1378,7 @@ def evaluate_pc_msdm(pcd_before, pcd_after, k=6, m=2, verbose=True):
         print(f"PC-MSDM (Original Paper eq, sym, p={m}): {final_score:.4f} (Raw Distortion={symmetric_distortion:.4f})")
     return final_score
 
-def evaluate_point_ssim(pcd_before, pcd_after, attribute='geometry', dispersion='variance', k=6, m=2, epsilon=None, verbose=True):
+def evaluate_point_ssim(pcd_before, pcd_after, attribute='geometry', dispersion='variance', k=12, m=2, epsilon=None, verbose=True):
     """
     PointSSIM (Point Cloud Structural Similarity) 評価指標。
     論文: "PointSSIM: A Structural Similarity Index for Point Clouds" に基づく。

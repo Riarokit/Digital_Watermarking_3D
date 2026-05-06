@@ -25,8 +25,8 @@ if __name__ == "__main__":
     # 画像サイズn×n
     n = 16
     # 埋め込み強度
-    # beta = 1.6e-3 #Bunny全周波用
-    beta = 3.6e-3 #Bunnyその他用
+    beta = 1.6e-3 #Bunny全周波用
+    # beta = 3.6e-3 #Bunnyその他用
     # beta = 1.3e-3 #Dragon全周波用
     # beta = 2.9e-3 #Dragonその他用
     # 1クラスタあたりの点数目安(k-means用)
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     flatness_weighting = 0
     # 周波数帯域アプローチ
     min_spectre = 0.0
-    max_spectre = 0.2
+    max_spectre = 1.0
     
 
     # 1. データ取得
