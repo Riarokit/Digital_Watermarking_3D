@@ -111,7 +111,7 @@ if __name__ == "__main__":
     DW1F.evaluate_point_ssim(pcd_before, pcd_after)
 
     # 8. 確認用
-    o3d.visualization.draw_geometries([pcd_after])
+    # o3d.visualization.draw_geometries([pcd_after])
     print(f"埋込ビット：{len(watermark_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
     DW1F.evaluate_robustness(watermark_bits, extracted_bits)

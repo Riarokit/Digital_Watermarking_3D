@@ -1308,89 +1308,177 @@ def evaluate_ssim(pcd_before, pcd_after, point_size=5.0, verbose=True, save_dir=
         print(f"SSIM (Multi-view): {final_score:.4f}")
     return final_score
 
-def compute_local_curvature(xyz, k=12):
+def extract_surface_info(xyz, k=6):
     """
-    各点の局所曲率を計算します。
-    近傍点(k)の共分散行列の固有値から曲率（最小固有値 / 固有値の和）を推定します。
+    点群の各点においてPCAを用いて近似接平面と2次曲面をフィッティングし、
+    その係数と局所座標系（フレーム）を抽出します。
     """
     from scipy.spatial import cKDTree
+    import numpy as np
+
     tree = cKDTree(xyz)
     _, idxs = tree.query(xyz, k=k)
-    curvatures = np.zeros(len(xyz))
-    for i, neighbors in enumerate(idxs):
-        pts = xyz[neighbors]
-        mean = np.mean(pts, axis=0)
-        cov = np.cov((pts - mean).T)
+    N = len(xyz)
+    
+    frames = np.zeros((N, 3, 3))
+    coeffs = np.zeros((N, 6))
+    curvatures = np.zeros(N)
+    
+    for i in range(N):
+        pts = xyz[idxs[i]]
+        p = xyz[i]
+        
+        centered = pts - p
+        cov = np.cov(centered.T)
         try:
-            eigvals = np.linalg.eigvalsh(cov)
-            eigvals = np.clip(eigvals, 0, None)
-            sum_eig = np.sum(eigvals)
-            if sum_eig == 0:
-                curvatures[i] = 0
-            else:
-                curvatures[i] = eigvals[0] / sum_eig
+            eigvals, eigvecs = np.linalg.eigh(cov)
         except np.linalg.LinAlgError:
-            curvatures[i] = 0
-    return curvatures
+            frames[i] = np.eye(3)
+            continue
+            
+        uz = eigvecs[:, 0]
+        ux = eigvecs[:, 1]
+        uy = eigvecs[:, 2]
+        frames[i] = np.array([ux, uy, uz])
+        
+        x_i = centered.dot(ux)
+        y_i = centered.dot(uy)
+        z_i = centered.dot(uz)
+        
+        A = np.column_stack((x_i**2, y_i**2, x_i * y_i, x_i, y_i, np.ones(len(x_i))))
+        
+        try:
+            theta, _, _, _ = np.linalg.lstsq(A, z_i, rcond=None)
+            coeffs[i] = theta
+            
+            a, b, c, d, e, f_coeff = theta
+            num = (1 + d**2)*a + (1 + e**2)*b - c*d*e
+            den = (1 + d**2 + e**2)**1.5
+            curvatures[i] = np.abs(num / den)
+            
+        except np.linalg.LinAlgError:
+            pass
+            
+    return {'frames': frames, 'coeffs': coeffs, 'curvatures': curvatures}
 
-def evaluate_pc_msdm(pcd_before, pcd_after, k=12, m=3, verbose=True):
+def _compute_msdm_directional(xyz_source, xyz_target, info_source, info_target, tree_target, h):
     """
-    PC-MSDM (Point Cloud Multi-Scale Distortion Metric) を模した客観的品質評価指標。
-    各点の局所近傍内で曲率の平均と分散を計算し、点ごとにSSIMを算出します。
-    その後、Minkowski Poolingにより最終スコアを計算します。
-    1.0に近いほど品質が高く（歪みが少ない）、0.0に近いほど品質が低いことを示します。
+    一方向 (source -> target) の局所歪み(LD)を計算します。
     """
-    xyz_b = np.asarray(pcd_before.points)
-    xyz_a = np.asarray(pcd_after.points)
-    
-    # 全点の曲率を事前計算
-    curv_b_all = compute_local_curvature(xyz_b, k)
-    curv_a_all = compute_local_curvature(xyz_a, k)
-    
+    import numpy as np
     from scipy.spatial import cKDTree
-    tree_b = cKDTree(xyz_b)
-    tree_a = cKDTree(xyz_a)
     
-    # オリジナルと透かし入りの対応点探索 (before -> after)
-    _, idxs_b2a = tree_a.query(xyz_b, k=1)
+    _, idxs_closest = tree_target.query(xyz_source, k=1)
     
-    # 各点の局所近傍インデックスを取得
-    _, nbrs_b = tree_b.query(xyz_b, k=k)
-    xyz_a_matched = xyz_a[idxs_b2a]
-    _, nbrs_a = tree_a.query(xyz_a_matched, k=k)
+    curv_source = info_source['curvatures']
+    curv_proj = np.zeros(len(xyz_source))
     
-    # 局所ウィンドウ内の曲率を取得
-    patch_curv_b = curv_b_all[nbrs_b] # (N, k)
-    patch_curv_a = curv_a_all[nbrs_a] # (N, k)
+    frames_t = info_target['frames']
+    coeffs_t = info_target['coeffs']
     
-    mu_b = np.mean(patch_curv_b, axis=1)
-    mu_a = np.mean(patch_curv_a, axis=1)
-    sigma_b_sq = np.var(patch_curv_b, axis=1)
-    sigma_a_sq = np.var(patch_curv_a, axis=1)
+    for i in range(len(xyz_source)):
+        p = xyz_source[i]
+        q_idx = idxs_closest[i]
+        q = xyz_target[q_idx]
+        
+        ux, uy, uz = frames_t[q_idx]
+        a, b, c, d, e, f_coeff = coeffs_t[q_idx]
+        
+        x_p = np.dot(p - q, ux)
+        y_p = np.dot(p - q, uy)
+        
+        Qx = 2*a*x_p + c*y_p + d
+        Qy = 2*b*y_p + c*x_p + e
+        num = (1 + Qx**2)*2*b - 2*Qx*Qy*c + (1 + Qy**2)*2*a
+        den = 2 * (1 + Qx**2 + Qy**2)**1.5
+        curv_proj[i] = np.abs(num / den)
+        
+    tree_source = cKDTree(xyz_source)
+    # 球形近傍の取得
+    nbrs_list = tree_source.query_ball_point(xyz_source, r=h)
     
-    # 共分散計算のためソート
-    patch_curv_b_sorted = np.sort(patch_curv_b, axis=1)
-    patch_curv_a_sorted = np.sort(patch_curv_a, axis=1)
-    cov_ab = np.mean((patch_curv_b_sorted - mu_b[:, None]) * (patch_curv_a_sorted - mu_a[:, None]), axis=1)
+    LDs = np.zeros(len(xyz_source))
+    sigma_g = h / 3.0
     
-    c1 = (0.01) ** 2
-    c2 = (0.03) ** 2
+    for i, nbrs in enumerate(nbrs_list):
+        if len(nbrs) <= 1:
+            LDs[i] = 0.0
+            continue
+            
+        pts = xyz_source[nbrs]
+        dists = np.linalg.norm(pts - xyz_source[i], axis=1)
+        w = np.exp(-(dists**2) / (2 * sigma_g**2))
+        w_sum = np.sum(w)
+        if w_sum <= 0:
+            LDs[i] = 0.0
+            continue
+        w /= w_sum
+        
+        c_p = curv_source[nbrs]
+        c_hat = curv_proj[nbrs]
+        
+        mu_p = np.sum(w * c_p)
+        mu_hat = np.sum(w * c_hat)
+        
+        sigma_p = np.sqrt(np.maximum(np.sum(w * (c_p - mu_p)**2), 0))
+        sigma_hat = np.sqrt(np.maximum(np.sum(w * (c_hat - mu_hat)**2), 0))
+        
+        cov = np.sum(w * (c_p - mu_p) * (c_hat - mu_hat))
+        
+        K = 1e-5
+        L = np.abs(mu_p - mu_hat) / (np.maximum(mu_p, mu_hat) + K)
+        C = np.abs(sigma_p - sigma_hat) / (np.maximum(sigma_p, sigma_hat) + K)
+        S = np.abs(sigma_p * sigma_hat - cov) / (sigma_p * sigma_hat + K)
+        
+        LDs[i] = (L + C + 0.5 * S) / 2.5
+        
+    return LDs
+
+def evaluate_pc_msdm(pcd_before, pcd_after, k=6, m=2, verbose=True):
+    """
+    論文での定義に忠実なPC-MSDM。
+    対応点探索時の曲面への投影、球形近傍でのガウス重み、ソートに依存しない正確な共分散、
+    および対称性のすべての要件を含みます。
+    ※ 2次曲面フィッティングの近傍点数として引数kを使用します。
+    """
+    import numpy as np
+    from scipy.spatial import cKDTree
     
-    l_comp = (2 * mu_b * mu_a + c1) / (mu_b**2 + mu_a**2 + c1)
-    s_comp = (2 * cov_ab + c2) / (sigma_b_sq + sigma_a_sq + c2)
-    local_ssim = l_comp * s_comp
+    xyz_ref = np.asarray(pcd_before.points)
+    xyz_dist = np.asarray(pcd_after.points)
+    
+    # 1. 局所2次曲面情報の計算
+    info_ref = extract_surface_info(xyz_ref, k=k)
+    info_dist = extract_surface_info(xyz_dist, k=k)
+    
+    # 2. バウンディングボックスからスケール h の決定
+    bb_min = np.min(xyz_ref, axis=0)
+    bb_max = np.max(xyz_ref, axis=0)
+    BB_length = np.linalg.norm(bb_max - bb_min)
+    h = 0.02 * BB_length
+    
+    tree_ref = cKDTree(xyz_ref)
+    tree_dist = cKDTree(xyz_dist)
+    
+    # 3. 双方向のLDを計算
+    LD_dist_to_ref = _compute_msdm_directional(xyz_dist, xyz_ref, info_dist, info_ref, tree_ref, h)
+    LD_ref_to_dist = _compute_msdm_directional(xyz_ref, xyz_dist, info_ref, info_dist, tree_dist, h)
     
     # Minkowski Pooling
-    distortions = 1.0 - local_ssim
-    distortions = np.clip(distortions, 0, None)
-    l_minkowski = np.mean(distortions ** m) ** (1.0 / m)
-    final_score = 1.0 - l_minkowski
+    l_minkowski_d2r = np.mean(LD_dist_to_ref ** m) ** (1.0 / m)
+    l_minkowski_r2d = np.mean(LD_ref_to_dist ** m) ** (1.0 / m)
+    
+    # 対称的なMSDMの歪みスコア
+    symmetric_distortion = (l_minkowski_d2r + l_minkowski_r2d) / 2.0
+    
+    # 品質スコア（1.0に近いほど高評価）として返す
+    final_score = np.clip(1.0 - symmetric_distortion, 0.0, 1.0)
     
     if verbose:
-        print(f"PC-MSDM (Local Curvature & Minkowski p={m}): {final_score:.4f}")
+        print(f"PC-MSDM (Original Paper eq, sym, p={m}): {final_score:.4f} (Raw Distortion={symmetric_distortion:.4f})")
     return final_score
 
-def evaluate_point_ssim(pcd_before, pcd_after, k=12, m=3, verbose=True):
+def evaluate_point_ssim(pcd_before, pcd_after, k=6, m=2, verbose=True):
     """
     PointSSIM を幾何属性に適用した厳密な局所評価指標。
     各点のk近傍における局所平均・分散を計算し、点ごとにSSIMを算出した後、
