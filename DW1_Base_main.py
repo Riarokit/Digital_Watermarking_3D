@@ -33,8 +33,8 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon_vrip_res2.ply"
+    # input_file = "C:/bun_zipper.ply"
+    input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"
@@ -106,3 +106,4 @@ if __name__ == "__main__":
     
     # 6. 点群の可視化 (確認用)
     o3d.visualization.draw_geometries([pcd_after])
+    DW1F.visualize_embedded_points(xyz, xyz_after)
