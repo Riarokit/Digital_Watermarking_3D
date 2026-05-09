@@ -3,12 +3,13 @@ import open3d as o3d
 import DW1_func as DW1F
 import matplotlib.pyplot as plt
 import os
+import argparse
 
 """
 M4において、攻撃を受けた際のGFT係数の変化と、係数の分布を可視化する
 """
 
-def check_spectrum():
+def check_spectrum(only_distribution=True):
     # 1. データ準備
     input_file = "C:/bun_zipper.ply"
     if os.path.exists(input_file):
@@ -22,23 +23,25 @@ def check_spectrum():
     # クラスタリング
     labels = DW1F.kmeans_cluster_points(xyz_orig, cluster_point=500, seed=42)
     
-    # ノイズ付加とスムージング付加
-    rng = np.random.RandomState(42)
-    noise_param = 0.05
-    noise = rng.normal(0, noise_param * np.mean(np.linalg.norm(xyz_orig, axis=1)), xyz_orig.shape)
-    xyz_noise = xyz_orig + noise
-    xyz_smooth = DW1F.smoothing_attack(xyz_orig, lambda_val=0.05, iterations=100, k=6)
+    if not only_distribution:
+        # ノイズ付加とスムージング付加
+        rng = np.random.RandomState(42)
+        noise_param = 0.05
+        noise = rng.normal(0, noise_param * np.mean(np.linalg.norm(xyz_orig, axis=1)), xyz_orig.shape)
+        xyz_noise = xyz_orig + noise
+        xyz_smooth = DW1F.smoothing_attack(xyz_orig, lambda_val=0.05, iterations=100, k=6)
 
-    # 抽出時の同期（インデックス対応付け）エラーを再現する
-    xyz_noise = DW1F.synchronize_point_cloud(xyz_noise, xyz_orig, verbose=False)
-    xyz_smooth = DW1F.synchronize_point_cloud(xyz_smooth, xyz_orig, verbose=False)
+        # 抽出時の同期（インデックス対応付け）エラーを再現する
+        xyz_noise = DW1F.synchronize_point_cloud(xyz_noise, xyz_orig, verbose=False)
+        xyz_smooth = DW1F.synchronize_point_cloud(xyz_smooth, xyz_orig, verbose=False)
 
     # 周波数ごとのエネルギー蓄積用
     # 周波数を 0.0~1.0 に正規化し、例えば 50 ビンで平均をとる
     num_bins = 50
     orig_spectrum = np.zeros(num_bins)
-    noise_spectrum = np.zeros(num_bins)
-    smooth_spectrum = np.zeros(num_bins)
+    if not only_distribution:
+        noise_spectrum = np.zeros(num_bins)
+        smooth_spectrum = np.zeros(num_bins)
     counts = np.zeros(num_bins)
 
     for c in np.unique(labels):
@@ -47,16 +50,18 @@ def check_spectrum():
             continue
             
         pts_orig = xyz_orig[idx]
-        pts_noise = xyz_noise[idx]
-        pts_smooth = xyz_smooth[idx]
+        if not only_distribution:
+            pts_noise = xyz_noise[idx]
+            pts_smooth = xyz_smooth[idx]
 
         # 疑似平面は「元の点群」から推定
         centroid, normal = DW1F.compute_pseudoplane_pca(pts_orig)
         
         # 高さ信号
         h_orig = DW1F.cluster_height_signal(pts_orig, centroid, normal)
-        h_noise = DW1F.cluster_height_signal(pts_noise, centroid, normal)
-        h_smooth = DW1F.cluster_height_signal(pts_smooth, centroid, normal)
+        if not only_distribution:
+            h_noise = DW1F.cluster_height_signal(pts_noise, centroid, normal)
+            h_smooth = DW1F.cluster_height_signal(pts_smooth, centroid, normal)
 
         # グラフ基底（元点群）
         W = DW1F.build_graph(pts_orig, graph_mode='knn', k=6, radius=0.03)
@@ -64,12 +69,13 @@ def check_spectrum():
 
         # GFT展開
         g_orig = DW1F.gft(h_orig, basis)
-        g_noise = DW1F.gft(h_noise, basis)
-        g_smooth = DW1F.gft(h_smooth, basis)
+        if not only_distribution:
+            g_noise = DW1F.gft(h_noise, basis)
+            g_smooth = DW1F.gft(h_smooth, basis)
 
-        # 差分（攻撃によるノイズ）
-        diff_noise = g_noise - g_orig
-        diff_smooth = g_smooth - g_orig
+            # 差分（攻撃によるノイズ）
+            diff_noise = g_noise - g_orig
+            diff_smooth = g_smooth - g_orig
 
         # 各係数のエネルギー（絶対値または2乗）を正規化周波数ビンに足し込む
         Q_ = len(g_orig)
@@ -78,34 +84,53 @@ def check_spectrum():
             bin_idx = min(int(freq_norm * num_bins), num_bins - 1)
             
             orig_spectrum[bin_idx] += np.abs(g_orig[i])
-            noise_spectrum[bin_idx] += np.abs(diff_noise[i])
-            smooth_spectrum[bin_idx] += np.abs(diff_smooth[i])
+            if not only_distribution:
+                noise_spectrum[bin_idx] += np.abs(diff_noise[i])
+                smooth_spectrum[bin_idx] += np.abs(diff_smooth[i])
             counts[bin_idx] += 1
 
     # 平均化
     orig_spectrum = np.divide(orig_spectrum, counts, out=np.zeros_like(orig_spectrum), where=counts!=0)
-    noise_spectrum = np.divide(noise_spectrum, counts, out=np.zeros_like(noise_spectrum), where=counts!=0)
-    smooth_spectrum = np.divide(smooth_spectrum, counts, out=np.zeros_like(smooth_spectrum), where=counts!=0)
+    if not only_distribution:
+        noise_spectrum = np.divide(noise_spectrum, counts, out=np.zeros_like(noise_spectrum), where=counts!=0)
+        smooth_spectrum = np.divide(smooth_spectrum, counts, out=np.zeros_like(smooth_spectrum), where=counts!=0)
 
     # 描画
     x_axis = np.linspace(0, 1, num_bins)
     
     plt.figure(figsize=(10, 6))
     plt.plot(x_axis, orig_spectrum, label='Original Component', color='black', linewidth=2)
-    plt.plot(x_axis, noise_spectrum, label='Random Noise Error', color='red', linestyle='--')
-    plt.plot(x_axis, smooth_spectrum, label='Smoothing Error', color='blue', linestyle='-.')
+    if not only_distribution:
+        plt.plot(x_axis, noise_spectrum, label='Random Noise Error', color='red', linestyle='--')
+        plt.plot(x_axis, smooth_spectrum, label='Smoothing Error', color='blue', linestyle='-.')
     
     plt.yscale('log')
     plt.xlabel('Normalized Frequency')
     plt.ylabel('Coefficient Magnitude (Log Scale)')
-    plt.title('GFT Coefficient Distribution & Attack Noise Spread')
+    if only_distribution:
+        plt.title('GFT Coefficient Distribution')
+    else:
+        plt.title('GFT Coefficient Distribution & Attack Noise Spread')
     plt.grid(True, which="both", ls="--", alpha=0.5)
     plt.legend()
     # Artifactディレクトリ等に保存（エフェメラル用）
     save_dir = r"C:\Users\ryoi1\.gemini\antigravity\brain\f518c22c-410c-469c-bf13-5f418ad98397"
     save_path = os.path.join(save_dir, "gft_spectrum.png")
+    
+    # 念のためディレクトリが存在するか確認し、なければカレントディレクトリに保存
+    if not os.path.exists(save_dir):
+        save_path = "gft_spectrum.png"
+        
     plt.savefig(save_path, bbox_inches='tight')
     print(f"Spectrum plot saved to: {save_path}")
 
 if __name__ == "__main__":
-    check_spectrum()
+    parser = argparse.ArgumentParser()
+    # action="store_true" だと引数なし実行時に False になってしまうため、
+    # 文字列で明示的に True/False を受け取るか、デフォルトを True に修正します。
+    parser.add_argument("--only_distribution", type=str, choices=['True', 'False', 'true', 'false'], default='True', 
+                        help="Visualize only the coefficient distribution (default: True)")
+    args = parser.parse_args()
+    
+    only_dist_flag = str(args.only_distribution).lower() == 'true'
+    check_spectrum(only_distribution=only_dist_flag)
