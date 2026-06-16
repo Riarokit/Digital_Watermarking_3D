@@ -1127,7 +1127,7 @@ def visualize_embedded_points(xyz_orig, xyz_after, threshold=1e-8):
 #  評価関数群
 # =========================================================
 
-def evaluate_imperceptibility(pcd_before, pcd_after, reverse=False, by_index=False, verbose=True):
+def evaluate_imperceptibility(pcd_before, pcd_after, reverse=True, by_index=False, verbose=True):
     """
     点群の評価指標を計算します。
     - pcd_before, pcd_after: open3d.geometry.PointCloud
@@ -1178,11 +1178,11 @@ def evaluate_imperceptibility(pcd_before, pcd_after, reverse=False, by_index=Fal
         else:
             mse = mse_fwd
 
-    sum_sq_signal = np.sum(points_before ** 2)
-    if sum_sq_diff == 0:
+    mean_sq_signal = np.mean(points_before ** 2)
+    if mse == 0:
         snr_ratio = float('inf')
     else:
-        snr_ratio = sum_sq_signal / sum_sq_diff
+        snr_ratio = mean_sq_signal / mse
     # max_range（PSNR用スケール）
     xyz = points_before
     p_max = np.max(xyz, axis=0)
