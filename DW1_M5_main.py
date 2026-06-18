@@ -95,6 +95,9 @@ if __name__ == "__main__":
     # OP. スムージング攻撃
     # xyz_after = DW1F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
 
+    # OP. ダウンサンプリング攻撃
+    # xyz_after = DW1F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=42)
+
     # 6. マルチクラスタ跨ぎ方式の抽出
     start = time.time()
     extracted_bits = DW1F.extract_watermark_pseudoplane_multicluster(

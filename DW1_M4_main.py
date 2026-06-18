@@ -95,6 +95,9 @@ if __name__ == "__main__":
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW1F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
 
+    # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
+    xyz_after = DW1F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=42)
+
     # 6. 単多数決方式の抽出
     start = time.time()
     extracted_bits = DW1F.extract_watermark_pseudoplane(
@@ -108,13 +111,13 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    DW1F.evaluate_imperceptibility(pcd_before, pcd_after)
-    DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
-    DW1F.evaluate_point_ssim(pcd_before, pcd_after)
+    # DW1F.evaluate_imperceptibility(pcd_before, pcd_after)
+    # DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
+    # DW1F.evaluate_point_ssim(pcd_before, pcd_after)
+    # DW1F.visualize_embedded_points(xyz, xyz_after)
 
     # 8. 確認用
     o3d.visualization.draw_geometries([pcd_after])
-    DW1F.visualize_embedded_points(xyz, xyz_after)
     print(f"埋込ビット：{len(watermark_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
     DW1F.evaluate_robustness(watermark_bits, extracted_bits)

@@ -1669,6 +1669,74 @@ def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
         
     return xyz_smooth
 
+def downsampling_attack(xyz, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=None):
+    """
+    点群に対してダウンサンプリング攻撃を行う。
+    
+    Parameters:
+    - xyz (np.ndarray): 入力点群座標（N×3）
+    - keep_ratio (float): ランダム・FPSモードで残す点の割合 (0.0 < keep_ratio <= 1.0)
+    - mode (str): ダウンサンプリングの方式
+        - 'random': ランダムに点をサンプリング（高速）
+        - 'voxel': Open3Dを用いたVoxel Gridダウンサンプリング（均一化）
+        - 'fps': 最遠点サンプリング（計算量は多いが極めて均一）
+    - voxel_size (float): 'voxel' モード時のボクセルサイズ（辺の長さ）
+    - seed (int): ランダムシード（再現性用）
+    
+    Returns:
+    - xyz_downsampled (np.ndarray): ダウンサンプリング後の点群（M×3, M <= N）
+    """
+    if keep_ratio <= 0.0 or keep_ratio > 1.0:
+        raise ValueError("keep_ratioは (0, 1] の範囲で指定してください。")
+        
+    N = xyz.shape[0]
+    
+    if mode == 'random':
+        rng = np.random.RandomState(seed)
+        keep_n = max(1, int(N * keep_ratio))
+        indices = rng.choice(N, keep_n, replace=False)
+        indices.sort()  # 元の相対順序を維持するためにソート
+        xyz_downsampled = xyz[indices]
+        print(f"[Attack] ランダム・ダウンサンプリング: 元点数={N} → 残点数={keep_n} ({keep_ratio*100:.1f}%)")
+        
+    elif mode == 'voxel':
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(xyz)
+        pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
+        xyz_downsampled = np.asarray(pcd_down.points)
+        print(f"[Attack] ボクセル・ダウンサンプリング (voxel_size={voxel_size}): 元点数={N} → 残点数={xyz_downsampled.shape[0]}")
+        
+    elif mode == 'fps':
+        keep_n = max(1, int(N * keep_ratio))
+        
+        # 最遠点サンプリング (FPS) の実装
+        selected_indices = np.zeros(keep_n, dtype=int)
+        rng = np.random.RandomState(seed)
+        selected_indices[0] = rng.randint(N)
+        
+        # 各点から、選択済みの点集合への最小距離
+        distances = np.full(N, np.inf)
+        
+        current_pt = xyz[selected_indices[0]]
+        for i in range(1, keep_n):
+            # 現在追加された点と全点との距離
+            dist_to_current = np.linalg.norm(xyz - current_pt, axis=1)
+            # 最小距離を更新
+            distances = np.minimum(distances, dist_to_current)
+            # 最小距離が最大となる点を選択
+            next_idx = np.argmax(distances)
+            selected_indices[i] = next_idx
+            current_pt = xyz[next_idx]
+            
+        selected_indices.sort()  # 元の相対順序を維持するためにソート
+        xyz_downsampled = xyz[selected_indices]
+        print(f"[Attack] 最遠点サンプリング (FPS): 元点数={N} → 残点数={keep_n} ({keep_ratio*100:.1f}%)")
+        
+    else:
+        raise ValueError("modeは 'random', 'voxel', 'fps' のいずれかを指定してください。")
+        
+    return xyz_downsampled
+
 def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
     """
     攻撃後点群をオリジナル点群と完全に同期（同じ点数・順序）させる。
