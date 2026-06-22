@@ -44,8 +44,8 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon_vrip_res2.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     # xyz_after = DW1F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    xyz_after = DW1F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=42)
+    xyz_after = DW1F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.03, seed=42)
 
     # 6. 単多数決方式の抽出
     start = time.time()
@@ -111,7 +111,7 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    # DW1F.evaluate_imperceptibility(pcd_before, pcd_after)
+    # DW1F.evaluate_psnr(pcd_before, pcd_after)
     # DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
     # DW1F.evaluate_point_ssim(pcd_before, pcd_after)
     # DW1F.visualize_embedded_points(xyz, xyz_after)
