@@ -461,8 +461,7 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
         rep = rep[:total_length]
     return rep
 
-### 関数間違い注意！！
-def embed_watermark_pseudoplane(
+def embed_watermark_m4(
     xyz: np.ndarray,
     labels: np.ndarray,
     embed_bits,
@@ -563,8 +562,7 @@ def embed_watermark_pseudoplane(
 
     return xyz_after
 
-
-def extract_watermark_pseudoplane(
+def extract_watermark_m4(
     xyz_emb: np.ndarray,
     xyz_orig: np.ndarray,
     labels: np.ndarray,

@@ -71,7 +71,7 @@ if __name__ == "__main__":
     # labels = DW1M4.split_large_clusters(xyz, labels, limit_points=3000)
 
     # 5. 単多数決方式の埋め込み
-    xyz_after = DW1M4.embed_watermark_pseudoplane(
+    xyz_after = DW1M4.embed_watermark_m4(
         xyz, labels, watermark_bits,
         beta=beta,
         graph_mode=graph_mode, k=k, radius=radius,
@@ -94,11 +94,11 @@ if __name__ == "__main__":
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    xyz_after = DW2F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=42)
+    xyz_after = DW2F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.01, seed=42)
 
     # 6. 単多数決方式の抽出
     start = time.time()
-    extracted_bits = DW1M4.extract_watermark_pseudoplane(
+    extracted_bits = DW1M4.extract_watermark_m4(
         xyz_after, xyz, labels, watermark_bits_length,
         graph_mode=graph_mode, k=k, radius=radius,
         min_spectre=min_spectre, max_spectre=max_spectre
