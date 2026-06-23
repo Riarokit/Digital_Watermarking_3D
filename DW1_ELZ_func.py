@@ -2,7 +2,7 @@ import numpy as np
 import open3d as o3d
 from sklearn.neighbors import NearestNeighbors
 import skfuzzy as fuzz
-import DW1_func as DW1F
+import DW2_func as DW2F
 
 def local_feature_clustering(xyz, k=6, verbose=False):
     """
@@ -86,7 +86,7 @@ def local_feature_clustering(xyz, k=6, verbose=False):
     medium_cluster_indices = np.where(labels == medium_cluster_id)[0]
     return medium_cluster_indices
 
-def embed_watermark_baseline(xyz, watermark_bits, n_points, a, k=6, verbose=True):
+def embed_watermark_elzein(xyz, watermark_bits, n_points, a, k=6, verbose=True):
     """
     ■ 2. 透かしの埋め込み
     中間クラスタの頂点をn個選び、各頂点座標に対してビットに応じて+aまたは-aを足し引きして透かしを埋め込む。
@@ -118,13 +118,13 @@ def embed_watermark_baseline(xyz, watermark_bits, n_points, a, k=6, verbose=True
     # 4. 透かしが埋め込まれた新しい点群を返す
     return xyz_new
 
-def extract_watermark_baseline(xyz_after, xyz, n_points, k=6, verbose=False):
+def extract_watermark_elzein(xyz_after, xyz, n_points, k=6, verbose=False):
     """
     ■ 3. 透かしの抽出
     元の点群から中間クラスタを特定し、埋め込み後点群との座標の差分からビットを抽出する(完全ノンブラインド型)。
     """
     # 0. 攻撃を受けた点群をオリジナル点群に1対1対応させて再サンプリング（同期・補完）
-    xyz_after = DW1F.synchronize_point_cloud(xyz_after, xyz, verbose=True)
+    xyz_after = DW2F.synchronize_point_cloud(xyz_after, xyz, verbose=True)
 
     # 1. クラスタリングは元の点群(xyz)を用いて、埋め込み対象の頂点インデックスを特定
     medium_indices = local_feature_clustering(xyz, k=k, verbose=verbose)

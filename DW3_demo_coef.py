@@ -1,6 +1,6 @@
 import numpy as np
 import open3d as o3d
-import DW1_func as DW1F
+import DW2_func as DW1F
 import matplotlib.pyplot as plt
 import os
 import argparse

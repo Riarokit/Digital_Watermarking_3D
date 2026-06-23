@@ -1,7 +1,7 @@
 import numpy as np
 import open3d as o3d
-import DW1_func as DW1F
-import DW1_Base_func as DW1B
+import DW2_func as DW2F
+import DW1_ELZ_func as DW1ELZ
 import time
 
 if __name__ == "__main__":
@@ -33,32 +33,28 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon_vrip_res2.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon_vrip_res2.ply"
     # input_file = "C:/Armadillo.ply"
     # input_file = "C:/longdress_vox12.ply"
     # input_file = "C:/soldier_vox12.ply"
-    
     pcd_before = o3d.io.read_point_cloud(input_file)
-    # 前処理（正規化、色情報の追加）
-    pcd_before = DW1F.normalize_point_cloud(pcd_before)
-    pcd_before = DW1F.add_colors(pcd_before, color="grad")
-    
+
+    # 2. 前処理（正規化、色情報の追加）
+    pcd_before = DW2F.normalize_point_cloud(pcd_before)
+    pcd_before = DW2F.add_colors(pcd_before, color="grad")
     xyz = np.asarray(pcd_before.points)
     colors = np.asarray(pcd_before.colors)
 
-    # 2. 埋め込みビット生成
-    watermark_bits = DW1F.image_to_bitarray(image_path, n=n)
+    # 3. 埋め込みビット生成
+    watermark_bits = DW2F.image_to_bitarray(image_path, n=n)
     watermark_bits_length = len(watermark_bits)
     print(f"[Debug] 埋込ビット数：{watermark_bits_length} (画像: {n}x{n})")
-    
-    # 埋め込み後の点群保存用
-    pcd_after = o3d.geometry.PointCloud()
 
-    # 3. 埋め込み処理
+    # 4. 埋め込み処理
     start_embed = time.time()
     try:
-        xyz_after = DW1B.embed_watermark_baseline(
+        xyz_after = DW1ELZ.embed_watermark_elzein(
             xyz, watermark_bits, 
             n_points=n_points, a=a, k=k
         )
@@ -72,41 +68,40 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = DW1F.noise_addition_attack(xyz_after, noise_percent=0.1, mode='gaussian', seed=42)
+    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.1, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = DW1F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
+    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=30, k=6)
 
     # OP. 切り取り攻撃（不可視性評価はコメントアウト）
-    # xyz_after = DW1F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
+    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW1F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=42)
+    # xyz_after = DW2F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=42)
 
-    # 4. 抽出処理
+    # 5. 抽出処理
     start_extract = time.time()
-    extracted_bits = DW1B.extract_watermark_baseline(
+    extracted_bits = DW1ELZ.extract_watermark_elzein(
         xyz_after, xyz, 
         n_points=n_points, k=k
     )
     extract_time = time.time() - start_extract
 
-    # 5. 評価結果出力
+    # 6. 視覚品質評価
+    pcd_after = o3d.geometry.PointCloud()
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    
-    DW1F.evaluate_imperceptibility(pcd_before, pcd_after, by_index=True)
-    DW1F.evaluate_pc_msdm(pcd_before, pcd_after)
-    DW1F.evaluate_point_ssim(pcd_before, pcd_after)
+    DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
+    DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+    DW2F.evaluate_point_ssim(pcd_before, pcd_after)
+    DW2F.visualize_embedded_points(xyz, xyz_after)
+    o3d.visualization.draw_geometries([pcd_after])
+
+    # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
-    
-    DW1F.evaluate_robustness(watermark_bits, extracted_bits)
-    DW1F.bitarray_to_image(extracted_bits, n=n, save_path="baseline_recovered.bmp")
+    DW2F.evaluate_robustness(watermark_bits, extracted_bits)
+    DW2F.bitarray_to_image(extracted_bits, n=n, save_path="elzein_recovered.bmp")
     print(f"埋込時間: {embed_time:.2f}秒")
     print(f"抽出時間: {extract_time:.2f}秒\n")
-    
-    # 6. 点群の可視化 (確認用)
-    o3d.visualization.draw_geometries([pcd_after])
-    DW1F.visualize_embedded_points(xyz, xyz_after)

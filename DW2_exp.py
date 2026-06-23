@@ -1,7 +1,7 @@
 import numpy as np
 import open3d as o3d
-import DW1_func as DW1F
-import DW1_Base_func as DW1B
+import DW2_func as DW1F
+import DW1_ELZ_func as DW1ELZ
 import os
 
 # ==========================================
@@ -154,7 +154,7 @@ def find_matching_alpha(pcd_before, xyz_orig, medium_indices, watermark_bits, ta
 def attack_and_extract_baseline(xyz_orig, xyz_after, watermark_bits, attack_type, attack_param, seed):
     xyz_att = apply_attack(xyz_after, attack_type, attack_param, seed)
     try:
-        extracted_bits = DW1B.extract_watermark_baseline(xyz_att, xyz_orig, n_points=len(watermark_bits), k=BASELINE_KNN_K, verbose=False)
+        extracted_bits = DW1ELZ.extract_watermark_baseline(xyz_att, xyz_orig, n_points=len(watermark_bits), k=BASELINE_KNN_K, verbose=False)
     except Exception as e:
         print(f"Baseline抽出エラー: {e}")
         extracted_bits = []
@@ -250,7 +250,7 @@ def main():
     # ===============================================
     # 1. ベースライン手法の前計算（FCMクラスタリング）
     print("\nベースライン手法(FCM)のクラスタリング実行中...")
-    medium_indices = DW1B.local_feature_clustering(xyz_orig, k=BASELINE_KNN_K, verbose=False)
+    medium_indices = DW1ELZ.local_feature_clustering(xyz_orig, k=BASELINE_KNN_K, verbose=False)
     init_a = 0.001
     xyz_after_base = find_matching_alpha(pcd, xyz_orig, medium_indices, watermark_bits, target_mse, init_a)
 
