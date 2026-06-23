@@ -94,7 +94,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.0, seed=42)
+    xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=0.5, seed=42)
 
     # 6. 単多数決方式の抽出
     start = time.time()
