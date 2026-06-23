@@ -3,6 +3,7 @@ import open3d as o3d
 from sklearn.neighbors import NearestNeighbors
 import skfuzzy as fuzz
 import DW2_func as DW2F
+from scipy.spatial import cKDTree
 
 def local_feature_clustering(xyz, k=6, verbose=False):
     """
@@ -124,7 +125,7 @@ def extract_watermark_elzein(xyz_after, xyz, n_points, k=6, verbose=False):
     元の点群から中間クラスタを特定し、埋め込み後点群との座標の差分からビットを抽出する(完全ノンブラインド型)。
     """
     # 0. 攻撃を受けた点群をオリジナル点群に1対1対応させて再サンプリング（同期・補完）
-    xyz_after = DW2F.synchronize_point_cloud(xyz_after, xyz, verbose=True)
+    xyz_after = synchronize_point_cloud(xyz_after, xyz, verbose=True)
 
     # 1. クラスタリングは元の点群(xyz)を用いて、埋め込み対象の頂点インデックスを特定
     medium_indices = local_feature_clustering(xyz, k=k, verbose=verbose)
@@ -164,3 +165,27 @@ def extract_watermark_elzein(xyz_after, xyz, n_points, k=6, verbose=False):
             
     # 4. 抽出されたnビットの配列を返す
     return extracted_bits
+
+def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
+    """
+    攻撃後点群をオリジナル点群と完全に同期（同じ点数・順序）させる。
+    """
+    if distance_threshold is None:
+        max_bound = np.max(xyz_orig, axis=0)
+        min_bound = np.min(xyz_orig, axis=0)
+        scale = np.linalg.norm(max_bound - min_bound)
+        distance_threshold = scale * 0.01
+
+    tree = cKDTree(xyz_att)
+    dists, indices = tree.query(xyz_orig, k=1)
+    
+    xyz_synced = xyz_att[indices].copy()
+    
+    missing_mask = dists > distance_threshold
+    xyz_synced[missing_mask] = xyz_orig[missing_mask]
+    
+    if verbose:
+        n_missing = np.sum(missing_mask)
+        print(f"[Sync] 再サンプリング完了。補完された欠損点数: {n_missing} / {len(xyz_orig)}")
+
+    return xyz_synced

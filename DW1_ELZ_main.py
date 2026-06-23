@@ -77,7 +77,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    xyz_after = DW2F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size_percent=1.0, seed=42)
+    xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.0, seed=42)
 
     # 5. 抽出処理
     start_extract = time.time()
@@ -92,11 +92,11 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
-    DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
-    DW2F.evaluate_point_ssim(pcd_before, pcd_after)
-    DW2F.visualize_embedded_points(xyz, xyz_after)
-    o3d.visualization.draw_geometries([pcd_after])
+    # DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
+    # DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+    # DW2F.evaluate_point_ssim(pcd_before, pcd_after)
+    # DW2F.visualize_embedded_points(xyz, xyz_after)
+    # o3d.visualization.draw_geometries([pcd_after])
 
     # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")
