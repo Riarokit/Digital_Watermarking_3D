@@ -712,7 +712,7 @@ def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
         
     return xyz_smooth
 
-def downsampling_attack(xyz, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=None):
+def downsampling_attack(xyz, keep_ratio=0.5, mode='voxel', voxel_size_percent=1.0, seed=None):
     """
     点群に対してダウンサンプリング攻撃を行う。
     
@@ -723,7 +723,7 @@ def downsampling_attack(xyz, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed
         - 'random': ランダムに点をサンプリング（高速）
         - 'voxel': Open3Dを用いたVoxel Gridダウンサンプリング（均一化）
         - 'fps': 最遠点サンプリング（計算量は多いが極めて均一）
-    - voxel_size (float): 'voxel' モード時のボクセルサイズ（辺の長さ）
+    - voxel_size_percent (float): 'voxel' モード時のボクセルサイズ（対角線長に対するパーセンテージ）
     - seed (int): ランダムシード（再現性用）
     
     Returns:
@@ -745,9 +745,14 @@ def downsampling_attack(xyz, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed
     elif mode == 'voxel':
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(xyz)
+        xyz_min = xyz.min(axis=0)
+        xyz_max = xyz.max(axis=0)
+        # 対角線長を基準としてボクセルサイズを計算
+        scale_base = np.linalg.norm(xyz_max - xyz_min)
+        voxel_size = scale_base * voxel_size_percent / 100
         pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
         xyz_downsampled = np.asarray(pcd_down.points)
-        print(f"[Attack] ボクセル・ダウンサンプリング (voxel_size={voxel_size}): 元点数={N} → 残点数={xyz_downsampled.shape[0]}")
+        print(f"[Attack] ボクセル・ダウンサンプリング (voxel_size={voxel_size:.6f}, {voxel_size_percent:.2f}%): 元点数={N} → 残点数={xyz_downsampled.shape[0]}")
         
     elif mode == 'fps':
         keep_n = max(1, int(N * keep_ratio))

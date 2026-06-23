@@ -22,7 +22,7 @@ ATTACKS = [
     ("noise", [0.2, 0.4, 0.6, 0.8, 1.0]),
     ("smoothing", [5, 10, 20, 30]),
     ("cropping", [0.9, 0.7, 0.5, 0.3]),
-    ("downsampling", [0.9, 0.7, 0.5, 0.3])
+    ("downsampling", [0.2, 0.4, 0.6, 0.8, 1.0])
 ]
 NUM_TRIALS = 5                               # 各攻撃条件ごとのテスト試行回数（平均BERを算出するため）
 
@@ -31,8 +31,7 @@ SMOOTHING_LAMBDA = 0.2                       # スムージングの強さ (lamb
 SMOOTHING_K = 6                              # スムージングの近傍点数
 CROPPING_MODE = 'axis'                       # 切り取りのモード ("axis" など)
 CROPPING_AXIS = 0                            # 切り取り軸 (0:x, 1:y, 2:z)
-DOWNSAMPLING_MODE = 'random'                 # ダウンサンプリングのモード ("random", "voxel", "fps")
-DOWNSAMPLING_VOXEL_SIZE = 0.02               # ボクセルサイズ (voxelモードのときのみ使用)
+DOWNSAMPLING_MODE = 'voxel'                  # ダウンサンプリングのモード ("random", "voxel", "fps")
 
 # --- 提案手法(GFT)の詳細パラメータ ---
 GRAPH_MODE = 'knn'                           # グラフ構築モード ("knn", "radius", "hybrid")
@@ -77,7 +76,7 @@ def apply_attack(xyz_after, attack_type, attack_param, seed):
             return xyz_after.copy()
     elif attack_type == "downsampling":
         try:
-            return DW1F.downsampling_attack(xyz_after, keep_ratio=attack_param, mode=DOWNSAMPLING_MODE, voxel_size=DOWNSAMPLING_VOXEL_SIZE, seed=seed)
+            return DW1F.downsampling_attack(xyz_after, mode=DOWNSAMPLING_MODE, voxel_size_percent=attack_param, seed=seed)
         except AttributeError:
             return xyz_after.copy()
     else:

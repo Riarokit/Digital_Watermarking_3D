@@ -77,7 +77,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW2F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size=0.02, seed=42)
+    xyz_after = DW2F.downsampling_attack(xyz_after, keep_ratio=0.5, mode='voxel', voxel_size_percent=1.0, seed=42)
 
     # 5. 抽出処理
     start_extract = time.time()
