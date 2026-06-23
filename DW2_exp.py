@@ -115,7 +115,7 @@ def find_matching_alpha(pcd_before, xyz_orig, medium_indices, watermark_bits, ta
     
     # 手順1: ブランケット探索による上限の決定（TARGET_PSNRがどんな値でも対応できるようにするため）
     high_a = initial_a
-    for _ in range(30):
+    for _ in range(20):
         _, mse, _ = run_embedding_elzein(pcd_before, xyz_orig, medium_indices, watermark_bits, high_a)
         if mse >= target_mse:
             break
@@ -127,7 +127,7 @@ def find_matching_alpha(pcd_before, xyz_orig, medium_indices, watermark_bits, ta
     best_xyz_after = None
     best_psnr = 0
     
-    for _ in range(40):
+    for _ in range(30):
         mid_a = (low_a + high_a) / 2
         try:
             xyz_after, mse, psnr = run_embedding_elzein(pcd_before, xyz_orig, medium_indices, watermark_bits, mid_a)
@@ -215,7 +215,7 @@ def find_matching_beta(pcd_before, xyz_orig, labels, watermark_bits, min_sp, max
 
 def attack_and_extract_proposed(xyz_orig, xyz_after, labels, watermark_bits, min_sp, max_sp, attack_type, attack_param, seed):
     xyz_att = apply_attack(xyz_after, attack_type, attack_param, seed)
-    extracted_bits = DW2F.extract_watermark_pseudoplane(
+    extracted_bits = DW1M4.extract_watermark_m4(
         xyz_att, xyz_orig, labels, len(watermark_bits),
         graph_mode=GRAPH_MODE, k=KNN_K, radius=GRAPH_RADIUS,
         min_spectre=min_sp, max_spectre=max_sp
@@ -260,7 +260,7 @@ def main():
     
     for cp in CLUSTER_POINTS_PROPOSED:
         print(f"\n[Proposed] 1クラスタ {cp} 点の KMeansクラスタリング実行中...")
-        labels_prop = DW2F.kmeans_cluster_points(xyz_orig, cluster_point=cp, seed=42)
+        labels_prop = DW1M4.kmeans_cluster_points(xyz_orig, cluster_point=cp, seed=42)
         min_cluster_size = np.min([np.sum(labels_prop == c) for c in np.unique(labels_prop)])
         if min_cluster_size < len(watermark_bits):
             print(f"警告: 最小クラスタの点数({min_cluster_size})が埋め込みビット数({len(watermark_bits)})を満たしていません！1つのクラスタ内にすべてのビット列が格納できず、一部のビットが情報落ちする可能性があります。")
