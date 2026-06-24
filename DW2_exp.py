@@ -23,7 +23,7 @@ ATTACKS = [
     # ("noise", [0.2, 0.4, 0.6, 0.8, 1.0]),
     # ("smoothing", [5, 10, 20, 30]),
     # ("cropping", [0.9, 0.7, 0.5, 0.3]),
-    ("downsampling", [0.05, 0.1, 0.15, 0.2])
+    ("downsampling", [0.5, 1.0, 1.5, 2.0])
 ]
 NUM_TRIALS = 5                               # 各攻撃条件ごとのテスト試行回数（平均BERを算出するため）
 
@@ -41,8 +41,6 @@ GRAPH_RADIUS = 0.03                          # 半径グラフの半径値
 FLATNESS_WEIGHTING = 0                       # 平面重み (0:なし, 1:平面部重み, 2:曲面部重み)
 K_NEIGHBORS = 20                             # 局所曲率推定の近傍点数
 CLUSTER_POINTS_PROPOSED = [2000]  # 検証する提案手法の1クラスタあたりの点数パターンのリスト
-
-# 比較する周波数帯域 (帯域名, 最小周波数, 最大周波数, 初期betaの目安)
 BANDS = [
     ("Full", 0.0, 1.0, 1.6e-3),
     ("Low ", 0.0, 0.2, 3.6e-3),
@@ -50,7 +48,7 @@ BANDS = [
     ("High", 0.8, 1.0, 3.6e-3)
 ]
 
-# --- ベースライン手法(FCM)の詳細パラメータ ---
+# --- ElZein手法の詳細パラメータ ---
 BASELINE_KNN_K = 6                           # FCM処理におけるk-NNの近傍点数
 # ==========================================
 
@@ -154,7 +152,7 @@ def find_matching_alpha(pcd_before, xyz_orig, medium_indices, watermark_bits, ta
 def attack_and_extract_elzein(xyz_orig, xyz_after, watermark_bits, attack_type, attack_param, seed):
     xyz_att = apply_attack(xyz_after, attack_type, attack_param, seed)
     try:
-        extracted_bits = DW1ELZ.extract_watermark_baseline(xyz_att, xyz_orig, n_points=len(watermark_bits), k=BASELINE_KNN_K, verbose=False)
+        extracted_bits = DW1ELZ.extract_watermark_elzein(xyz_att, xyz_orig, n_points=len(watermark_bits), k=BASELINE_KNN_K, verbose=False)
     except Exception as e:
         print(f"ElZein抽出エラー: {e}")
         extracted_bits = []
