@@ -26,6 +26,7 @@ if __name__ == "__main__":
     # 透かしの埋め込み強度
     a = 2.66e-3 #Bunny用
     # a = 3.56e-3 #Dragon用
+    # a = 3.21e-3 #Armadillo用
     
     # 近傍点数k
     k = 6

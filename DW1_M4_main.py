@@ -25,11 +25,6 @@ if __name__ == "__main__":
     """
     # 画像サイズn×n
     n = 16
-    # 埋め込み強度
-    beta = 1.6e-3 #Bunny全周波用
-    # beta = 3.6e-3 #Bunnyその他用
-    # beta = 1.3e-3 #Dragon全周波用
-    # beta = 2.9e-3 #Dragonその他用
     # 1クラスタあたりの点数目安(k-means用)
     cluster_point = 2000
     # グラフ構築モード
@@ -38,18 +33,28 @@ if __name__ == "__main__":
     radius = 0.03
     # 平面曲面アプローチ
     flatness_weighting = 0
-    # 周波数帯域アプローチ
-    min_spectre = 0.0
-    max_spectre = 1.0
-    
+
+    # Bunny全周波用
+    beta = 1.61e-3, min_spectre = 0.0, max_spectre = 1.0, input_file = "C:/bun_zipper.ply"
+    # Bunny低周波用
+    # beta = 3.62e-3, min_spectre = 0.0, max_spectre = 0.2, input_file = "C:/bun_zipper.ply"
+    # Bunny高周波用
+    # beta = 3.70e-3, min_spectre = 0.8, max_spectre = 1.0, input_file = "C:/bun_zipper.ply"
+    # Dragon全周波用
+    # beta = 1.32e-3, min_spectre = 0.0, max_spectre = 1.0, input_file = "C:/dragon_vrip_res2.ply"
+    # Dragon低周波用
+    # beta = 2.96e-3, min_spectre = 0.0, max_spectre = 0.2, input_file = "C:/dragon_vrip_res2.ply"
+    # Dragon高周波用
+    # beta = 3.15e-3, min_spectre = 0.8, max_spectre = 1.0, input_file = "C:/dragon_vrip_res2.ply"
+    # Armadillo全周波用
+    # beta = 1.68e-3, min_spectre = 0.0, max_spectre = 1.0, input_file = "C:/Armadillo.ply"
+    # Armadillo低周波用
+    # beta = 3.74e-3, min_spectre = 0.0, max_spectre = 0.2, input_file = "C:/Armadillo.ply"
+    # Armadillo高周波用
+    # beta = 4.16e-3, min_spectre = 0.8, max_spectre = 1.0, input_file = "C:/Armadillo.ply"
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon_vrip_res2.ply"
-    # input_file = "C:/Armadillo.ply"
-    # input_file = "C:/longdress_vox12.ply"
-    # input_file = "C:/soldier_vox12.ply"
     pcd_before = o3d.io.read_point_cloud(input_file)
 
     # 2. 前処理（色情報追加・理想クラスタ数計算）
@@ -94,7 +99,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=0.5, seed=42)
+    # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=2.0, seed=42)
 
     # 6. 単多数決方式の抽出
     start = time.time()
@@ -110,11 +115,11 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    # DW2F.evaluate_psnr(pcd_before, pcd_after)
-    # DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
-    # DW2F.evaluate_point_ssim(pcd_before, pcd_after)
+    DW2F.evaluate_psnr(pcd_before, pcd_after)
+    DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+    DW2F.evaluate_point_ssim(pcd_before, pcd_after)
     # DW2F.visualize_embedded_points(xyz, xyz_after)
-    # o3d.visualization.draw_geometries([pcd_after])
+    o3d.visualization.draw_geometries([pcd_after])
 
     # 8. ロバスト性評価
     print(f"埋込ビット：{len(watermark_bits)}")
