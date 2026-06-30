@@ -446,7 +446,119 @@ def evaluate_pc_msdm(pcd_before, pcd_after, k=6, m=2, verbose=True):
     final_score = np.clip(1.0 - symmetric_distortion, 0.0, 1.0)
     
     if verbose:
-        print(f"PC-MSDM (Original Paper eq, sym, p={m}): {final_score:.4f} (Raw Distortion={symmetric_distortion:.4f})")
+        print(f"PC-MSDM (k={k}, p={m}): {final_score:.4f}")
+    return final_score
+
+def evaluate_angular_similarity(pcd_before, pcd_after, k_normals=12, verbose=True):
+    """
+    論文 'Point Cloud Quality Assessment Metric Based on Angular Similarity' に基づく
+    Angular Similarity 指標の実装。
+    
+    接平面（法線ベクトル）のなす角を計算し、幾何的な構造の類似度を評価します。
+    """
+    
+    def _ensure_normals(pcd, k):
+        """法線がない場合に推定を行う"""
+        if not pcd.has_normals():
+            pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=k))
+        return np.asarray(pcd.normals)
+
+    # 1. 法線の準備
+    normals_ref = _ensure_normals(pcd_before, k_normals)
+    normals_dist = _ensure_normals(pcd_after, k_normals)
+    
+    xyz_ref = np.asarray(pcd_before.points)
+    xyz_dist = np.asarray(pcd_after.points)
+
+    def _compute_directed_angular_sim(p_source, p_target, n_source, n_target):
+        """片方向の Angular Similarity を計算 (Source -> Target)"""
+        tree_target = cKDTree(p_target)
+        # 相手側点群から最も近い点のインデックスを取得
+        _, indices = tree_target.query(p_source, k=1)
+        
+        # 対応する点の法線ベクトルを取得
+        # n_a: 参照側の法線, n_b: 歪み側の法線
+        n_a = n_source
+        n_b = n_target[indices]
+        
+        # 2. コサイン類似度の計算
+        # x = (n_a · n_b) / (||n_a|| * ||n_b||)
+        # 通常、法線は正規化されているためドット積のみで計算可能
+        dot_product = np.sum(n_a * n_b, axis=1)
+        cos_sim = np.clip(dot_product, -1.0, 1.0)
+        
+        # 3. 最小の角 theta_tilde の計算
+        # theta_tilde = arccos(|x|)  範囲: [0, pi/2]
+        theta_tilde = np.arccos(np.abs(cos_sim))
+        
+        # 4. 各点の Angular Similarity の計算
+        # score = 1 - (2 * theta_tilde / pi)
+        point_scores = 1.0 - (2.0 * theta_tilde / np.pi)
+        
+        # 5. プーリング: 平均をとる
+        return np.mean(point_scores)
+
+    # 双方向の類似度を計算
+    sim_ref_to_dist = _compute_directed_angular_sim(xyz_ref, xyz_dist, normals_ref, normals_dist)
+    sim_dist_to_ref = _compute_directed_angular_sim(xyz_dist, xyz_ref, normals_dist, normals_ref)
+
+    # 6. 対称化: 2つの方向のうち「最小値」を最終スコアとする
+    final_score = min(sim_ref_to_dist, sim_dist_to_ref)
+
+    if verbose:
+        print(f"Angular-Similarity (k={k_normals}): {final_score:.4f}")
+
+    return final_score
+
+def evaluate_p2d(pcd_before, pcd_after, k=40, eps=1e-8, verbose=True):
+    """
+    論文 'A Point-to-Distribution Joint Geometry and Color Metric...' に基づく
+    幾何歪み評価指標 P2D (Point-to-Distribution) の実装。
+    
+    各点と、相手側点群の近傍 K 個の分布（平均・分散）とのマハラノビス距離を計算します。
+    """
+    xyz_ref = np.asarray(pcd_before.points)
+    xyz_dist = np.asarray(pcd_after.points)
+
+    def _compute_directed_p2d(p_source, p_target, k_nn):
+        """片方向の P2D 距離を計算 (Source -> Target Distribution)"""
+        tree_target = cKDTree(p_target)
+        # 1. 相手側点群から K 個の近傍点を探索
+        dist_nn, indices = tree_target.query(p_source, k=k_nn)
+        
+        # 近傍点の座標を取得
+        neighbors = p_target[indices] # 形状: (n_points, k, 3)
+        
+        # 2. 近傍点分布の統計量（平均・分散）を計算
+        # mu: 各点に対応する近傍 K 個の平均 (n_points, 3)
+        mu = np.mean(neighbors, axis=1)
+        # var: 各点に対応する近傍 K 個の分散 (n_points, 3)
+        var = np.var(neighbors, axis=1)
+        
+        # 3. マハラノビス距離（標準化ユークリッド距離）の計算
+        # 成分間の相関を無視する場合、距離は成分ごとの (差^2 / 分散) の和の平方根となる
+        # ゼロ割り防止のため微小値 eps を加算
+        diff_sq = (p_source - mu) ** 2
+        m_dist_sq = np.sum(diff_sq / (var + eps), axis=1)
+        m_dist = np.sqrt(m_dist_sq)
+        
+        # 5. プーリング: 全点の平均をとる
+        return np.mean(m_dist)
+
+    # 双方向の距離を計算
+    d_ref_to_dist = _compute_directed_p2d(xyz_ref, xyz_dist, k)
+    d_dist_to_ref = _compute_directed_p2d(xyz_dist, xyz_ref, k)
+
+    # 対称化: 2つの方向のうち最大値を最終的な歪みスコアとする
+    symmetric_distortion = max(d_ref_to_dist, d_dist_to_ref)
+    
+    # 品質スコアへの変換 (LogP2D): スコアが高いほど高品質
+    # Q = log10(1 + 1/D)
+    final_score = np.log10(1 + (1.0 / (symmetric_distortion + eps)))
+
+    if verbose:
+        print(f"LogP2D (k={k}, eps={eps}): {final_score:.4f}")
+
     return final_score
 
 def evaluate_point_ssim(pcd_before, pcd_after, attribute='geometry', dispersion='variance', k=12, m=2, epsilon=None, verbose=True):
@@ -577,7 +689,7 @@ def evaluate_point_ssim(pcd_before, pcd_after, attribute='geometry', dispersion=
     final_score = np.clip(1.0 - error_sym, 0.0, 1.0)
     
     if verbose:
-        print(f"PointSSIM (attr={attribute}, disp={dispersion}, m={m}): {final_score:.4f} (error_sym={error_sym:.4f})")
+        print(f"PointSSIM (attr={attribute}, disp={dispersion}, m={m}): {final_score:.4f}")
     return final_score
 
 # =========================================================

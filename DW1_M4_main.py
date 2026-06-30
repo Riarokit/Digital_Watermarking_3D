@@ -35,23 +35,23 @@ if __name__ == "__main__":
     flatness_weighting = 0
 
     # Bunny全周波用
-    beta = 1.61e-3, min_spectre = 0.0, max_spectre = 1.0, input_file = "C:/bun_zipper.ply"
+    # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
-    # beta = 3.62e-3, min_spectre = 0.0, max_spectre = 0.2, input_file = "C:/bun_zipper.ply"
+    beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
-    # beta = 3.70e-3, min_spectre = 0.8, max_spectre = 1.0, input_file = "C:/bun_zipper.ply"
+    # beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
-    # beta = 1.32e-3, min_spectre = 0.0, max_spectre = 1.0, input_file = "C:/dragon_vrip_res2.ply"
+    # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon_vrip_res2.ply"
     # Dragon低周波用
-    # beta = 2.96e-3, min_spectre = 0.0, max_spectre = 0.2, input_file = "C:/dragon_vrip_res2.ply"
+    # beta = 2.96e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon_vrip_res2.ply"
     # Dragon高周波用
-    # beta = 3.15e-3, min_spectre = 0.8, max_spectre = 1.0, input_file = "C:/dragon_vrip_res2.ply"
+    # beta = 3.15e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon_vrip_res2.ply"
     # Armadillo全周波用
-    # beta = 1.68e-3, min_spectre = 0.0, max_spectre = 1.0, input_file = "C:/Armadillo.ply"
+    # beta = 1.68e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
     # Armadillo低周波用
-    # beta = 3.74e-3, min_spectre = 0.0, max_spectre = 0.2, input_file = "C:/Armadillo.ply"
+    # beta = 3.74e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/Armadillo.ply"
     # Armadillo高周波用
-    # beta = 4.16e-3, min_spectre = 0.8, max_spectre = 1.0, input_file = "C:/Armadillo.ply"
+    # beta = 4.16e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
@@ -117,6 +117,8 @@ if __name__ == "__main__":
     print(pcd_after)
     DW2F.evaluate_psnr(pcd_before, pcd_after)
     DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+    DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
+    DW2F.evaluate_p2d(pcd_before, pcd_after)
     DW2F.evaluate_point_ssim(pcd_before, pcd_after)
     # DW2F.visualize_embedded_points(xyz, xyz_after)
     o3d.visualization.draw_geometries([pcd_after])
