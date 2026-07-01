@@ -449,7 +449,7 @@ def evaluate_pc_msdm(pcd_before, pcd_after, k=6, m=2, verbose=True):
         print(f"PC-MSDM (k={k}, p={m}): {final_score:.4f}")
     return final_score
 
-def evaluate_angular_similarity(pcd_before, pcd_after, k_normals=12, verbose=True):
+def evaluate_angular_similarity(pcd_before, pcd_after, k_normals=4, verbose=True):
     """
     論文 'Point Cloud Quality Assessment Metric Based on Angular Similarity' に基づく
     Angular Similarity 指標の実装。
@@ -510,7 +510,7 @@ def evaluate_angular_similarity(pcd_before, pcd_after, k_normals=12, verbose=Tru
 
     return final_score
 
-def evaluate_p2d(pcd_before, pcd_after, k=40, eps=1e-8, verbose=True):
+def evaluate_p2d(pcd_before, pcd_after, k=6, eps=1e-8, verbose=True):
     """
     論文 'A Point-to-Distribution Joint Geometry and Color Metric...' に基づく
     幾何歪み評価指標 P2D (Point-to-Distribution) の実装。
