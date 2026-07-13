@@ -137,6 +137,48 @@ def normalize_point_cloud(pcd):
     
     return pcd
 
+def visualize_mesh_with_highlighted_vertices(
+    mesh,
+    highlighted_indices=None,
+    mesh_color=(0.35, 0.65, 0.95),
+    highlight_color=(1.0, 0.05, 0.05),
+    show_wireframe=True,
+    window_name="Mesh visualization",
+):
+    """メッシュを着色表示し、指定頂点を点群として強調表示する。
+
+    Hu 法の入力検査では ``highlighted_indices`` に未参照頂点を渡す。面は青、
+    未参照頂点は赤で表示され、wireframe により面接続も確認できる。
+    """
+    if len(mesh.vertices) == 0:
+        raise ValueError("可視化する頂点がありません。")
+
+    display_mesh = o3d.geometry.TriangleMesh(mesh)
+    display_mesh.compute_vertex_normals()
+    display_mesh.paint_uniform_color(mesh_color)
+    geometries = [display_mesh]
+
+    if highlighted_indices is not None and len(highlighted_indices):
+        indices = np.asarray(highlighted_indices, dtype=np.int64)
+        vertices = np.asarray(mesh.vertices)
+        if np.any(indices < 0) or np.any(indices >= len(vertices)):
+            raise ValueError("highlighted_indices contains an out-of-range vertex index.")
+        highlighted_points = o3d.geometry.PointCloud()
+        highlighted_points.points = o3d.utility.Vector3dVector(vertices[indices])
+        highlighted_points.paint_uniform_color(highlight_color)
+        geometries.append(highlighted_points)
+
+    visualizer = o3d.visualization.Visualizer()
+    visualizer.create_window(window_name=window_name, width=1280, height=900)
+    for geometry in geometries:
+        visualizer.add_geometry(geometry)
+    render_option = visualizer.get_render_option()
+    render_option.mesh_show_wireframe = show_wireframe
+    render_option.mesh_show_back_face = True
+    render_option.point_size = 7.0
+    visualizer.run()
+    visualizer.destroy_window()
+
 # =========================================================
 #  評価関数群
 # =========================================================
