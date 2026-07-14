@@ -104,5 +104,7 @@ if __name__ == "__main__":
     print(f"抽出ビット長：{len(extracted_bits)}")
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
     DW2F.bitarray_to_image(extracted_bits, n=n, save_path="elzein_recovered.bmp")
+
+    # 8. 固有評価
     print(f"埋込時間: {embed_time:.2f}秒")
     print(f"抽出時間: {extract_time:.2f}秒\n")

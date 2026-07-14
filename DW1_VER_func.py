@@ -414,16 +414,3 @@ def extract_watermark_verma_mesh(
     if return_details:
         return bits, details
     return bits
-
-
-def generate_prng_bits_verma(length: int, seed: Optional[int] = None) -> np.ndarray:
-    """論文 Fig. 1 の PRNG bits を再現実験用に生成する補助関数。
-
-    論文は PRNG の種類を規定していないため、これは NumPy PCG64 を使う実験用
-    ユーティリティであり、提案法固有の必須処理ではない。
-    """
-    if length < 0:
-        raise ValueError("length must be non-negative.")
-    return np.random.default_rng(seed).integers(0, 2, size=length, dtype=np.uint8)
-
-

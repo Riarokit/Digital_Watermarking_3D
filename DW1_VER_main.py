@@ -67,7 +67,7 @@ if __name__ == "__main__":
         raise RuntimeError(f"Verma法の埋め込みに失敗しました: {error}") from error
     embed_time = time.time() - start_embed
 
-    # OP. ノイズ攻撃（本手法は小数桁を直接利用するため、通常は抽出不能になる）
+    # OP. ノイズ攻撃
     # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.1, mode="gaussian", seed=42)
 
     # OP. スムージング攻撃
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
     DW2F.bitarray_to_image(extracted_bits, n=n, save_path="verma_recovered.bmp")
 
-    # 8. その他
+    # 8. 固有評価
     print(f"[Verma] peak bin: {key_info.peak_bin:02d}")
     print(f"[Verma] peak位置数: {len(embed_details['all_embedding_positions'])}")
     print(f"[Verma] 使用位置数: {key_info.used_position_count}")

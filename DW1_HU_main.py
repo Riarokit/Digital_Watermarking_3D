@@ -109,7 +109,7 @@ if __name__ == "__main__":
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
     DW2F.bitarray_to_image(extracted_bits, n=n, save_path="hu_recovered.bmp")
     
-    # 8. その他
+    # 8. 固有評価
     print(f"[Hu] 埋込強度 alpha: {alpha:.6e}")
     print(f"[Hu] 埋込位置数: {len(key_info.embedding_indices)} "
           f"({T_rep} repetitions x {len(watermark_bits)} bits)")
