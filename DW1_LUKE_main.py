@@ -62,7 +62,7 @@ if __name__ == "__main__":
     distortion_threshold = (
         distortion_threshold_original / normalization_radius
     )
-    isolated_indices = DW1LUKE.find_unreferenced_vertex_indices(raw_vertices, raw_triangles)
+    isolated_indices = DW2F.find_unreferenced_vertex_indices(raw_vertices, raw_triangles)
     if show_input_mesh:
         DW2F.visualize_mesh_with_highlighted_vertices(mesh_before, highlighted_indices=isolated_indices)
     pcd_before = o3d.geometry.PointCloud()
@@ -72,7 +72,7 @@ if __name__ == "__main__":
     xyz = np.asarray(pcd_before.points).copy()
     triangles = raw_triangles.copy()
     colors = np.asarray(pcd_before.colors).copy()
-    xyz, triangles, retained_indices = DW1LUKE.remove_unreferenced_vertices(xyz, triangles)
+    xyz, triangles, retained_indices = DW2F.remove_unreferenced_vertices(xyz, triangles)
     colors = colors[retained_indices]
     pcd_before.points = o3d.utility.Vector3dVector(xyz)
     pcd_before.colors = o3d.utility.Vector3dVector(colors)

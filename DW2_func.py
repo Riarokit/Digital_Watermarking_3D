@@ -137,6 +137,59 @@ def normalize_point_cloud(pcd):
     
     return pcd
 
+
+def remove_unreferenced_vertices(vertices, triangles):
+    """面から参照されない頂点を除去し、面インデックスを振り直す。"""
+    vertices = np.asarray(vertices, dtype=np.float64)
+    triangles = np.asarray(triangles, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError("vertices must have shape (N, 3).")
+    if not np.isfinite(vertices).all():
+        raise ValueError("vertices contains NaN or infinity.")
+    if triangles.ndim != 2 or triangles.shape[1] != 3:
+        raise ValueError("triangles must have shape (M, 3).")
+    if len(triangles) == 0:
+        return np.empty((0, 3)), triangles.copy(), np.empty(0, dtype=np.int64)
+    used = np.unique(triangles.ravel())
+    if np.any(used < 0) or np.any(used >= len(vertices)):
+        raise ValueError("triangles contains an out-of-range vertex index.")
+    remap = np.full(len(vertices), -1, dtype=np.int64)
+    remap[used] = np.arange(len(used), dtype=np.int64)
+    return vertices[used].copy(), remap[triangles], used
+
+
+def find_unreferenced_vertex_indices(vertices, triangles):
+    """どの三角形面からも参照されていない頂点番号を返す。"""
+    vertices = np.asarray(vertices)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError("vertices must have shape (N, 3).")
+    _, _, used = remove_unreferenced_vertices(vertices, triangles)
+    mask = np.ones(len(vertices), dtype=bool)
+    mask[used] = False
+    return np.flatnonzero(mask)
+
+
+def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
+    """攻撃後点群を原頂点へ最近傍対応させ、欠損位置を原座標で補う。"""
+    xyz_att = np.asarray(xyz_att, dtype=np.float64)
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    if xyz_att.ndim != 2 or xyz_att.shape[1] != 3 or len(xyz_att) == 0:
+        raise ValueError("xyz_att must have shape (N, 3) and be non-empty.")
+    if xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
+        raise ValueError("xyz_orig must have shape (N, 3).")
+    if distance_threshold is None:
+        distance_threshold = np.linalg.norm(np.ptp(xyz_orig, axis=0)) * 0.01
+    if distance_threshold < 0:
+        raise ValueError("distance_threshold must be non-negative.")
+    tree = cKDTree(xyz_att)
+    distances, indices = tree.query(xyz_orig, k=1)
+    synchronized = xyz_att[indices].copy()
+    missing = distances > distance_threshold
+    synchronized[missing] = xyz_orig[missing]
+    if verbose:
+        print(f"[Sync] compensated missing vertices: {np.count_nonzero(missing)} / {len(xyz_orig)}")
+    return synchronized
+
 def visualize_mesh_with_highlighted_vertices(
     mesh,
     highlighted_indices=None,

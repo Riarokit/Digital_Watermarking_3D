@@ -26,7 +26,7 @@ if __name__ == "__main__":
     # 2. 前処理
     raw_vertices = np.asarray(mesh_before.vertices)
     raw_triangles = np.asarray(mesh_before.triangles)
-    isolated_indices = DW1VER.find_unreferenced_vertex_indices(
+    isolated_indices = DW2F.find_unreferenced_vertex_indices(
         raw_vertices, raw_triangles
     )
     if show_input_mesh:
@@ -39,7 +39,7 @@ if __name__ == "__main__":
     xyz = np.asarray(pcd_before.points).copy()
     triangles = raw_triangles.copy()
     colors = np.asarray(pcd_before.colors).copy()
-    xyz, triangles, retained_indices = DW1VER.remove_unreferenced_vertices(
+    xyz, triangles, retained_indices = DW2F.remove_unreferenced_vertices(
         xyz, triangles
     )
     colors = colors[retained_indices]

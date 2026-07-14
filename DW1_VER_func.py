@@ -97,29 +97,6 @@ def _validate_bits(bits):
     return bits
 
 
-def remove_unreferenced_vertices(vertices, triangles):
-    """三角形面から参照されない孤立頂点を除去し、面番号を再割り当てする。"""
-    vertices, triangles = _validate_mesh(vertices, triangles)
-    if len(triangles) == 0:
-        raise ValueError("triangles is empty; unreferenced vertices cannot be determined.")
-
-    used = np.unique(triangles.ravel())
-    remap = np.full(len(vertices), -1, dtype=np.int64)
-    remap[used] = np.arange(len(used), dtype=np.int64)
-    return vertices[used].copy(), remap[triangles], used
-
-
-def find_unreferenced_vertex_indices(vertices, triangles):
-    """いずれの三角形面にも現れない頂点番号を返す。"""
-    vertices, triangles = _validate_mesh(vertices, triangles)
-    if len(triangles) == 0:
-        return np.arange(len(vertices), dtype=np.int64)
-    used = np.unique(triangles.ravel())
-    mask = np.ones(len(vertices), dtype=bool)
-    mask[used] = False
-    return np.flatnonzero(mask)
-
-
 def round_vertices_verma(vertices):
     """論文の前処理に従い、全座標を小数第 6 位に丸める。
 

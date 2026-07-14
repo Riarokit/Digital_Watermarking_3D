@@ -3,7 +3,7 @@ import open3d as o3d
 import random
 import string
 from sklearn.cluster import KMeans
-from scipy.spatial import cKDTree
+import DW2_func as DW2F
 from concurrent.futures import ProcessPoolExecutor
 from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbors_graph
 import scipy.sparse as sp
@@ -582,7 +582,7 @@ def extract_watermark_m4(
     - 疑似平面推定は xyz_orig（埋め込み前）で行う（xyz_embで推定すると透かし変位が平面推定に混入する）。
     - グラフも xyz_orig（クラスタ内座標）で構築する（埋め込み前と一致させる）。
     """
-    xyz_emb = synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
+    xyz_emb = DW2F.synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
     if embed_bits_length <= 0:
         return []
 
@@ -654,27 +654,3 @@ def extract_watermark_m4(
             extracted_bits.append(1 if votes.count(1) > votes.count(0) else 0)
 
     return extracted_bits
-
-def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
-    """
-    攻撃後点群をオリジナル点群と完全に同期（同じ点数・順序）させる。
-    """
-    if distance_threshold is None:
-        max_bound = np.max(xyz_orig, axis=0)
-        min_bound = np.min(xyz_orig, axis=0)
-        scale = np.linalg.norm(max_bound - min_bound)
-        distance_threshold = scale * 0.01
-
-    tree = cKDTree(xyz_att)
-    dists, indices = tree.query(xyz_orig, k=1)
-    
-    xyz_synced = xyz_att[indices].copy()
-    
-    missing_mask = dists > distance_threshold
-    xyz_synced[missing_mask] = xyz_orig[missing_mask]
-    
-    if verbose:
-        n_missing = np.sum(missing_mask)
-        print(f"[Sync] 再サンプリング完了。補完された欠損点数: {n_missing} / {len(xyz_orig)}")
-
-    return xyz_synced

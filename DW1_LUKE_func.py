@@ -90,29 +90,6 @@ def _validate_mesh(vertices: np.ndarray, triangles: np.ndarray) -> Tuple[np.ndar
     return vertices, triangles
 
 
-def remove_unreferenced_vertices(vertices: np.ndarray, triangles: np.ndarray):
-    """どの面にも使われていない頂点を除去し、面インデックスを再番号付けする。"""
-    vertices = np.asarray(vertices, dtype=np.float64)
-    triangles = np.asarray(triangles, dtype=np.int64)
-    if triangles.ndim != 2 or triangles.shape[1] != 3:
-        raise ValueError("triangles must have shape (M, 3).")
-    used = np.unique(triangles.ravel())
-    if np.any(used < 0) or np.any(used >= len(vertices)):
-        raise ValueError("triangles contains an out-of-range vertex index.")
-    remap = np.full(len(vertices), -1, dtype=np.int64)
-    remap[used] = np.arange(len(used), dtype=np.int64)
-    return vertices[used].copy(), remap[triangles], used
-
-
-def find_unreferenced_vertex_indices(vertices: np.ndarray, triangles: np.ndarray) -> np.ndarray:
-    """どの三角形面にも参照されていない頂点番号を返す。"""
-    vertices = np.asarray(vertices)
-    _, _, used = remove_unreferenced_vertices(vertices, triangles)
-    mask = np.ones(len(vertices), dtype=bool)
-    mask[used] = False
-    return np.flatnonzero(mask)
-
-
 def _facets_from_indexed_mesh(vertices: np.ndarray, triangles: np.ndarray) -> np.ndarray:
     """indexed meshをCode Ocean実装と同じ ``(M, 9)`` の面配列へ変換する。"""
     return vertices[triangles].reshape(-1, 9)

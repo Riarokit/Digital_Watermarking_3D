@@ -6,7 +6,7 @@
 
 import numpy as np
 import skfuzzy as fuzz
-from scipy.spatial import cKDTree
+import DW2_func as DW2F
 
 
 def _validate_mesh(vertices, triangles):
@@ -142,7 +142,7 @@ def extract_watermark_elzein_mesh(
     original_vertices, triangles = _validate_mesh(original_vertices, triangles)
     marked_vertices = np.asarray(marked_vertices, dtype=float)
     if marked_vertices.shape != original_vertices.shape:
-        marked_vertices = synchronize_point_cloud(
+        marked_vertices = DW2F.synchronize_point_cloud(
             marked_vertices, original_vertices, verbose=verbose
         )
     selected = local_feature_clustering(
@@ -156,24 +156,6 @@ def extract_watermark_elzein_mesh(
         coordinate_sums = (marked_vertices[group] - original_vertices[group]).sum(axis=1)
         extracted.append(int(np.count_nonzero(coordinate_sums > 0) > len(group) / 2))
     return extracted
-
-
-def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
-    """攻撃後点群を原頂点へ最近傍対応させ、欠損位置を原座標で補う。"""
-    if distance_threshold is None:
-        scale = np.linalg.norm(np.ptp(xyz_orig, axis=0))
-        distance_threshold = scale * 0.01
-    tree = cKDTree(xyz_att)
-    distances, indices = tree.query(xyz_orig, k=1)
-    synchronized = xyz_att[indices].copy()
-    missing = distances > distance_threshold
-    synchronized[missing] = xyz_orig[missing]
-    if verbose:
-        print(
-            f"[Sync] compensated missing vertices: "
-            f"{np.count_nonzero(missing)} / {len(xyz_orig)}"
-        )
-    return synchronized
 
 
 def embed_watermark_elzein(

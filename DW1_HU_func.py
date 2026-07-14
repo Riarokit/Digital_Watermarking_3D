@@ -37,33 +37,6 @@ class HuWatermarkKey:
     epsilon: float
 
 
-def remove_unreferenced_vertices(vertices, triangles):
-    """面に一度も現れない頂点を除去し、面インデックスを再番号付けする。
-
-    これは面接続を再構成・変更しないため、Hu 法が要求する元メッシュのトポロジーを
-    保ったまま、PLY に含まれる孤立頂点だけを除外できる。
-    """
-    vertices = np.asarray(vertices, dtype=float)
-    triangles = np.asarray(triangles, dtype=np.int64)
-    if triangles.ndim != 2 or triangles.shape[1] != 3:
-        raise ValueError("triangles must have shape (M, 3).")
-    used = np.unique(triangles.ravel())
-    if np.any(used < 0) or np.any(used >= len(vertices)):
-        raise ValueError("triangles contains an out-of-range vertex index.")
-    remap = np.full(len(vertices), -1, dtype=np.int64)
-    remap[used] = np.arange(len(used))
-    return vertices[used].copy(), remap[triangles], used
-
-
-def find_unreferenced_vertex_indices(vertices, triangles):
-    """どの三角形面にも含まれない頂点のインデックスを返す。"""
-    vertices = np.asarray(vertices)
-    _, _, used = remove_unreferenced_vertices(vertices, triangles)
-    mask = np.ones(len(vertices), dtype=bool)
-    mask[used] = False
-    return np.flatnonzero(mask)
-
-
 def _validate_mesh(vertices, triangles):
     vertices = np.asarray(vertices, dtype=float)
     triangles = np.asarray(triangles, dtype=np.int64)
