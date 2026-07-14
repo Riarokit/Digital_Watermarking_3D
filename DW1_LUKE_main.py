@@ -178,7 +178,7 @@ if __name__ == "__main__":
     DW2F.evaluate_robustness(watermark_bits, recovered_bits)
     DW2F.bitarray_to_image(recovered_bits, n=n, save_path="luke_recovered.bmp")
     
-    # 8. その他
+    # 8. 固有評価
     print(f"[Luke] 埋め込み要求要素数: {key_info.requested_watermark_size}")
     print(f"[Luke] 実際の埋め込み要素数: {key_info.embedded_watermark_size}")
     print(f"[Luke] Flux順位参照: {extract_details['valid_rank_lookup']}")

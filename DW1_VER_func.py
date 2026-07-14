@@ -11,12 +11,13 @@
 1. 各頂点座標を小数第 6 位に丸める。
 2. 各座標の小数 6 桁を 2 桁ずつに分割し、1 頂点あたり 9 個の値を持つ
    2-digit matrix M (shape: N x 9) を作る。
-3. M の 00-99 ヒストグラムから最頻値（peak bin）を求める。
+3. 低歪み化のため x, y, z の小数第 5--6 桁だけから 00--99 の
+   ヒストグラムを作り、最頻値（peak bin）を求める。
 4. 秘密ビット列を 3 bit ごとに 0-7 の十進数字へ変換し、2 個ずつ連結して
    00-77 の 2 桁値を作る。従って peak 位置 1 個につき 6 bit を格納する。
-5. M を行優先で走査し、元の M が peak bin である位置を秘密値で置換する。
+5. 対象3列を行優先で走査し、全peak位置へ秘密ビット列を循環反復して埋め込む。
 6. 非ブラインド抽出では元メッシュから同じ peak 位置を特定し、透かし入り
-   メッシュの対応値を読み出して 6 bit ずつ復元する。
+   メッシュの対応値を読み出し、元ビット位置ごとの多数決で復元する。
 
 重要な再現上の判断:
 - 論文本文は「3 bit ごとに十進変換」と記す一方、Fig. 4 は 3,1,4,5,... を
@@ -24,16 +25,15 @@
   Table 2 の容量（payload / 6 が peak 数に対応）に整合する 6 bit/position
   として実装する。
 - peak bin が同率の場合の規則は論文にないため、最小の bin を選ぶ。
-- 埋め込み位置は Fig. 4 に従い M の行優先順で全 peak 出現箇所を用いる。
-- 論文には秘密長の格納方法がないため、末尾 0 padding を除去するための
-  ``VermaWatermarkKey`` に元ビット長を保持する。抽出位置自体は鍵ではなく
-  元メッシュから再計算する。
+- 論文には対象桁と冗長化方法の明記がない。全9列を置換すると大きな変位が
+  生じるため、本比較実装は小数第5--6桁の3列だけを対象とする。また、全peak
+  位置へビット列を反復し、抽出時にビット単位の多数決を行う。
+- 論文には秘密長の格納方法がないため、``VermaWatermarkKey`` に元ビット長を
+  保持する。抽出位置自体は鍵ではなく元メッシュから再計算する。
 - 回転、平行移動、頂点並べ替えに対する位置合わせ手順は論文本文に示されて
   いないため、本実装の基本抽出は元メッシュと透かし入りメッシュで同一の
   頂点順序・座標系を前提とする。
-- 論文は 9 列のどの桁対も置換対象としている。この記述をそのまま実装すると
-  小数第 1--2 桁の置換で大きな変位が生じ得るため、Table 2 の 103.5 dB 以上の
-  PSNR は本文だけからは再現できない。桁を限定する等の未記載処理は加えない。
+- この桁限定と反復多数決は、論文の不足部分を補う本比較実装の解釈である。
 - 品質・ロバスト性評価は比較実験で定義を統一するため、このファイルには
   実装せず ``DW2_func.py`` の評価関数を使用する。
 """
@@ -51,6 +51,9 @@ _SYMBOL_BASE = 1 << _SYMBOL_BITS  # 8
 _SYMBOLS_PER_CELL = 2
 _BITS_PER_CELL = _SYMBOL_BITS * _SYMBOLS_PER_CELL  # 6
 _SCALE = 10 ** _DECIMAL_PLACES
+# 論文では対象列が明記されていないが、低歪み化のため各座標の小数第5--6桁
+# (x56, y56, z56) だけをヒストグラム構築・埋め込みの対象とする。
+_EMBEDDING_COLUMNS = np.array([2, 5, 8], dtype=np.int64)
 
 
 @dataclass(frozen=True)
@@ -186,13 +189,15 @@ def pair_matrix_to_vertices_verma(pair_matrix, reference_vertices) -> np.ndarray
 
 
 def compute_two_digit_histogram_verma(pair_matrix) -> np.ndarray:
-    """00-99 の 100 bin ヒストグラムを返す。"""
+    """小数第5--6桁の列について、00--99の100 binヒストグラムを返す。"""
     pairs = np.asarray(pair_matrix, dtype=np.int64)
     if pairs.ndim != 2 or pairs.shape[1] != 9:
         raise ValueError("pair_matrix must have shape (N, 9).")
     if np.any(pairs < 0) or np.any(pairs > 99):
         raise ValueError("pair_matrix contains a value outside [0, 99].")
-    return np.bincount(pairs.ravel(), minlength=100)[:100]
+    return np.bincount(
+        pairs[:, _EMBEDDING_COLUMNS].ravel(), minlength=100
+    )[:100]
 
 
 def find_peak_bin_verma(pair_matrix) -> Tuple[int, np.ndarray]:
@@ -206,7 +211,7 @@ def find_peak_bin_verma(pair_matrix) -> Tuple[int, np.ndarray]:
 
 
 def find_embedding_positions_verma(pair_matrix, peak_bin: Optional[int] = None):
-    """元の M における peak bin の位置を行優先順で返す。
+    """元のMの小数第5--6桁列におけるpeak bin位置を行優先順で返す。
 
     返り値は shape (K, 2) で、各行は ``[vertex_index, matrix_column]``。
     """
@@ -217,14 +222,18 @@ def find_embedding_positions_verma(pair_matrix, peak_bin: Optional[int] = None):
         peak_bin, _ = find_peak_bin_verma(pairs)
     if not 0 <= int(peak_bin) <= 99:
         raise ValueError("peak_bin must be in [0, 99].")
-    flat_indices = np.flatnonzero(pairs.ravel(order="C") == int(peak_bin))
-    return np.column_stack(np.unravel_index(flat_indices, pairs.shape)).astype(np.int64)
+    selected = pairs[:, _EMBEDDING_COLUMNS]
+    flat_indices = np.flatnonzero(selected.ravel(order="C") == int(peak_bin))
+    rows, selected_columns = np.unravel_index(flat_indices, selected.shape)
+    return np.column_stack(
+        (rows, _EMBEDDING_COLUMNS[selected_columns])
+    ).astype(np.int64)
 
 
 def compute_embedding_capacity_verma(vertices) -> Dict[str, float]:
     """論文方式の最大容量を返す。
 
-    peak 位置 1 個に 3-bit symbol を 2 個、すなわち 6 bit を格納する。
+    各座標の小数第5--6桁だけを対象とし、peak位置1個に6 bitを格納する。
     """
     pair_matrix = vertices_to_pair_matrix_verma(vertices)
     peak_bin, histogram = find_peak_bin_verma(pair_matrix)
@@ -309,14 +318,21 @@ def embed_watermark_verma_mesh(vertices, triangles, secret_bits):
     original_pairs = vertices_to_pair_matrix_verma(vertices)
     peak_bin, histogram = find_peak_bin_verma(original_pairs)
     positions = find_embedding_positions_verma(original_pairs, peak_bin)
-    payload_values, padding_bits = secret_bits_to_payload_values_verma(bits)
-
-    if len(payload_values) > len(positions):
+    capacity_bits = len(positions) * _BITS_PER_CELL
+    if len(bits) > capacity_bits:
         raise ValueError(
             "Secret data exceeds the Verma embedding capacity: "
-            f"required {len(payload_values)} positions ({len(bits)} bits), "
-            f"available {len(positions)} positions ({len(positions) * _BITS_PER_CELL} bits)."
+            f"required {len(bits)} bits, available {capacity_bits} bits."
         )
+
+    # 全peak位置を利用し、秘密ビット列を容量いっぱいまで循環反復する。
+    # capacity_bitsは6の倍数なので、payload変換時のpaddingは発生しない。
+    repeated_bits = (
+        np.resize(bits, capacity_bits)
+        if len(bits)
+        else np.empty(0, dtype=np.uint8)
+    )
+    payload_values, padding_bits = secret_bits_to_payload_values_verma(repeated_bits)
 
     marked_pairs = original_pairs.copy()
     used_positions = positions[: len(payload_values)]
@@ -324,7 +340,6 @@ def embed_watermark_verma_mesh(vertices, triangles, secret_bits):
         marked_pairs[used_positions[:, 0], used_positions[:, 1]] = payload_values
 
     watermarked_vertices = pair_matrix_to_vertices_verma(marked_pairs, vertices)
-    capacity_bits = len(positions) * _BITS_PER_CELL
     key_info = VermaWatermarkKey(
         secret_bit_length=len(bits),
         used_position_count=len(payload_values),
@@ -341,6 +356,8 @@ def embed_watermark_verma_mesh(vertices, triangles, secret_bits):
         "padding_bits": padding_bits,
         "capacity_bits": capacity_bits,
         "payload_bits": len(bits),
+        "repeated_payload_bits": len(repeated_bits),
+        "average_repetitions": capacity_bits / len(bits) if len(bits) else 0.0,
         "embedding_rate_bpv": len(bits) / len(vertices),
         "maximum_embedding_rate_bpv": capacity_bits / len(vertices),
         "rounded_cover_vertices": round_vertices_verma(vertices),
@@ -402,7 +419,21 @@ def extract_watermark_verma_mesh(
 
     used_positions = positions[:used_position_count]
     values = marked_pairs[used_positions[:, 0], used_positions[:, 1]]
-    bits = payload_values_to_secret_bits_verma(values, bit_length)
+
+    # 論文に誤り値の棄却・補正規則はないため、全セルをそのまま復号する。
+    # 攻撃等で各桁が0--7の範囲外になった場合は、未対応の攻撃として
+    # payload_values_to_secret_bits_vermaがValueErrorを送出する。
+    decoded = payload_values_to_secret_bits_verma(values)
+    decoded_stream_indices = np.arange(len(decoded), dtype=np.int64)
+
+    vote_ones = np.zeros(bit_length, dtype=np.int64)
+    vote_counts = np.zeros(bit_length, dtype=np.int64)
+    if bit_length:
+        original_bit_indices = decoded_stream_indices % bit_length
+        np.add.at(vote_ones, original_bit_indices, decoded)
+        np.add.at(vote_counts, original_bit_indices, 1)
+    # 同数の場合は0とする。票がないビットも0となり、detailsで確認できる。
+    bits = (vote_ones * 2 > vote_counts).astype(np.uint8)
 
     details = {
         "peak_bin": peak_bin,
@@ -410,6 +441,8 @@ def extract_watermark_verma_mesh(
         "used_embedding_positions": used_positions,
         "extracted_payload_values": values,
         "extracted_bit_length": len(bits),
+        "vote_counts": vote_counts,
+        "bits_without_votes": int(np.count_nonzero(vote_counts == 0)),
     }
     if return_details:
         return bits, details

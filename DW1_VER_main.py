@@ -35,7 +35,6 @@ if __name__ == "__main__":
         )
     pcd_before = o3d.geometry.PointCloud()
     pcd_before.points = mesh_before.vertices
-    pcd_before = DW2F.normalize_point_cloud(pcd_before)
     pcd_before = DW2F.add_colors(pcd_before, color="grad")
     xyz = np.asarray(pcd_before.points).copy()
     triangles = raw_triangles.copy()
@@ -68,7 +67,7 @@ if __name__ == "__main__":
     embed_time = time.time() - start_embed
 
     # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.1, mode="gaussian", seed=42)
+    xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.1, mode="gaussian", seed=42)
 
     # OP. スムージング攻撃
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=10)
@@ -113,6 +112,7 @@ if __name__ == "__main__":
         embed_details["used_embedding_positions"][:, 1], minlength=9
     )
     print(f"[Verma] 使用位置の列別内訳: {used_columns.tolist()}")
+    print(f"[Verma] 平均反復回数: {embed_details['average_repetitions']:.2f} 回/bit")
     print(f"[Verma] 最大埋め込み率: {embed_details['maximum_embedding_rate_bpv']:.4f} bpv")
     print(f"埋込時間: {embed_time:.2f}秒")
     print(f"抽出時間: {extract_time:.2f}秒\n")
