@@ -1,327 +1,394 @@
-import numpy as np
-import open3d as o3d
-import DW2_func as DW2F
-import DW1_X1_func as DW1X1
-import DW1_ELZ_func as DW1ELZ
+"""El Zein・Hu・Verma・提案手法を同一メッシュ上で比較する実験スクリプト。"""
+
 import os
 
-# ==========================================
-# グローバルパラメータ設定
-# ==========================================
-# --- 共通＆入出力設定 ---
-TARGET_PSNR = 60.0                           # 目標とするPSNR (dB) 【※埋め込み直後・攻撃前の視覚品質】
-INPUT_FILE = "C:/bun_zipper.ply"             # 対象の点群データ
+import numpy as np
+import open3d as o3d
+
+import DW1_ELZ_func as DW1ELZ
+import DW1_HU_func as DW1HU
+import DW1_VER_func as DW1VER
+import DW1_X1_func as DW1X1
+import DW2_func as DW2F
+
+
+# ============================== 共通設定 ==============================
+TARGET_PSNR = 60.0
+INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/dragon_vrip_res2.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
-# INPUT_FILE = "C:/longdress_vox12.ply"
-# INPUT_FILE = "C:/soldier_vox12.ply"
-IMAGE_PATH = "watermark16.bmp"                # 埋め込む透かし画像
-WATERMARK_SIZE = 16                           # 埋め込む画像のサイズ (nxn)
+IMAGE_PATH = "watermark16.bmp"
+WATERMARK_SIZE = 16
+NUM_TRIALS = 5
 
-# --- 攻撃に関する設定 ---
-ATTACKS = [
+# visual_quality は攻撃を加えず、4種類の品質指標を NUM_TRIALS 回測る。
+EXPERIMENTS = [
     # ("noise", [0.2, 0.4, 0.6, 0.8, 1.0]),
     # ("smoothing", [5, 10, 20, 30]),
     # ("cropping", [0.9, 0.7, 0.5, 0.3]),
-    ("downsampling", [0.5, 1.0, 1.5, 2.0])
+    ("downsampling", [0.5, 1.0, 1.5, 2.0]),
+    # ("visual_quality", [None]),
 ]
-NUM_TRIALS = 5                               # 各攻撃条件ごとのテスト試行回数（平均BERを算出するため）
 
-NOISE_MODE = 'gaussian'                      # ノイズの分布 ("gaussian" または "uniform")
-SMOOTHING_LAMBDA = 0.2                       # スムージングの強さ (lambda)
-SMOOTHING_K = 6                              # スムージングの近傍点数
-CROPPING_MODE = 'axis'                       # 切り取りのモード ("axis" など)
-CROPPING_AXIS = 0                            # 切り取り軸 (0:x, 1:y, 2:z)
-DOWNSAMPLING_MODE = 'voxel'                  # ダウンサンプリングのモード ("random", "voxel", "fps")
+NOISE_MODE = "gaussian"
+SMOOTHING_LAMBDA = 0.2
+SMOOTHING_K = 6
+CROPPING_MODE = "axis"
+CROPPING_AXIS = 0
+DOWNSAMPLING_MODE = "voxel"
 
-# --- 提案手法(GFT)の詳細パラメータ ---
-GRAPH_MODE = 'knn'                           # グラフ構築モード ("knn", "radius", "hybrid")
-KNN_K = 6                                    # k-NNの近傍点数
-GRAPH_RADIUS = 0.03                          # 半径グラフの半径値
-FLATNESS_WEIGHTING = 0                       # 平面重み (0:なし, 1:平面部重み, 2:曲面部重み)
-K_NEIGHBORS = 20                             # 局所曲率推定の近傍点数
-CLUSTER_POINTS_PROPOSED = [2000]  # 検証する提案手法の1クラスタあたりの点数パターンのリスト
+# 提案手法
+GRAPH_MODE = "knn"
+KNN_K = 6
+GRAPH_RADIUS = 0.03
+FLATNESS_WEIGHTING = 0
+K_NEIGHBORS = 20
+CLUSTER_POINTS_PROPOSED = [2000]
 BANDS = [
     ("Full", 0.0, 1.0, 1.6e-3),
-    ("Low ", 0.0, 0.2, 3.6e-3),
-    # ("Mid ", 0.4, 0.6, 3.6e-3),
-    ("High", 0.8, 1.0, 3.6e-3)
+    ("Low", 0.0, 0.2, 3.6e-3),
+    ("High", 0.8, 1.0, 3.6e-3),
 ]
 
-# --- ElZein手法の詳細パラメータ ---
-BASELINE_KNN_K = 6                           # FCM処理におけるk-NNの近傍点数
-# ==========================================
+# Hu手法（論文実装のパラメータ）
+HU_FIDEP = 115.0
+HU_T = 25
+HU_ARNOLD_ITERATIONS = 20
 
-def calculate_target_mse(pcd_orig, target_psnr):
-    xyz_orig = np.asarray(pcd_orig.points)
-    p_max = np.max(xyz_orig, axis=0)
-    p_min = np.min(xyz_orig, axis=0)
-    peak = np.linalg.norm(p_max - p_min)
-    target_mse = (peak ** 2) / (10 ** (target_psnr / 10))
-    return target_mse
 
-def apply_attack(xyz_after, attack_type, attack_param, seed):
+def point_cloud(vertices):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.asarray(vertices))
+    return pcd
+
+
+def calculate_target_mse(vertices, target_psnr):
+    peak = np.linalg.norm(np.ptp(vertices, axis=0))
+    return peak**2 / 10 ** (target_psnr / 10.0)
+
+
+def embedding_quality(vertices, marked_vertices):
+    metrics = DW2F.evaluate_psnr(
+        point_cloud(vertices), point_cloud(marked_vertices), by_index=True, verbose=False
+    )
+    return metrics["mse"], metrics["psnr"]
+
+
+def apply_attack(vertices, attack_type, parameter, seed):
     if attack_type == "noise":
-        return DW2F.noise_addition_attack(xyz_after, noise_percent=attack_param, mode=NOISE_MODE, seed=seed)
-    elif attack_type == "smoothing":
-        try:
-            return DW2F.smoothing_attack(xyz_after, lambda_val=SMOOTHING_LAMBDA, iterations=int(attack_param), k=SMOOTHING_K)
-        except AttributeError:
-            return xyz_after.copy()
-    elif attack_type == "cropping":
-        try:
-            return DW2F.cropping_attack(xyz_after, keep_ratio=attack_param, mode=CROPPING_MODE, axis=CROPPING_AXIS)
-        except AttributeError:
-            return xyz_after.copy()
-    elif attack_type == "downsampling":
-        try:
-            return DW2F.downsampling_attack(xyz_after, mode=DOWNSAMPLING_MODE, voxel_size_percent=attack_param, seed=seed)
-        except AttributeError:
-            return xyz_after.copy()
+        return DW2F.noise_addition_attack(
+            vertices, noise_percent=parameter, mode=NOISE_MODE, seed=seed
+        )
+    if attack_type == "smoothing":
+        return DW2F.smoothing_attack(
+            vertices,
+            lambda_val=SMOOTHING_LAMBDA,
+            iterations=int(parameter),
+            k=SMOOTHING_K,
+        )
+    if attack_type == "cropping":
+        return DW2F.cropping_attack(
+            vertices,
+            keep_ratio=parameter,
+            mode=CROPPING_MODE,
+            axis=CROPPING_AXIS,
+        )
+    if attack_type == "downsampling":
+        return DW2F.downsampling_attack(
+            vertices,
+            mode=DOWNSAMPLING_MODE,
+            voxel_size_percent=parameter,
+            seed=seed,
+        )
+    if attack_type == "visual_quality":
+        return np.asarray(vertices).copy()
+    raise ValueError(f"Unknown experiment type: {attack_type}")
+
+
+def synchronize_if_needed(attacked, original):
+    if np.asarray(attacked).shape == np.asarray(original).shape:
+        return np.asarray(attacked)
+    return DW2F.synchronize_point_cloud(attacked, original, verbose=False)
+
+
+def embed_elzein_from_selection(vertices, selected, bits, strength):
+    if len(selected) < len(bits):
+        raise ValueError(
+            f"El Zein capacity shortage: {len(selected)} carriers for {len(bits)} bits."
+        )
+    marked = vertices.copy()
+    for bit, group in zip(bits, np.array_split(selected, len(bits))):
+        marked[group] += strength if bit else -strength
+    return marked
+
+
+def match_strength(original, embed_function, target_mse, initial_strength, label):
+    """埋め込み強度を二分探索し、目標MSEに最も近い結果を返す。"""
+    high = initial_strength
+    best_vertices = embed_function(high)
+    best_mse, best_psnr = embedding_quality(original, best_vertices)
+    for _ in range(20):
+        if best_mse >= target_mse:
+            break
+        high *= 2.0
+        best_vertices = embed_function(high)
+        best_mse, best_psnr = embedding_quality(original, best_vertices)
     else:
-        return xyz_after.copy()
+        raise RuntimeError(f"{label}: failed to bracket the target MSE.")
 
-# ================= ElZein手法の関数 =================
-def run_embedding_elzein(pcd_before, xyz_orig, medium_indices, watermark_bits, a):
-    # 二分探索を高速化するため、ElZeinの数式(加算/減算)を直接実行（再クラスタリング回避）
-    xyz_after = xyz_orig.copy()
-    n_points = len(watermark_bits)
-    
-    if len(medium_indices) < n_points:
-        raise ValueError(f"Target points ({n_points}) exceeds available points in medium cluster ({len(medium_indices)}).")
-        
-    groups = np.array_split(medium_indices, n_points)
-    
-    for i in range(n_points):
-        bit = watermark_bits[i]
-        group_indices = groups[i]
-        for idx in group_indices:
-            v = xyz_after[idx]
-            if bit == 1:
-                xyz_after[idx] = v + a
-            elif bit == 0:
-                xyz_after[idx] = v - a
-
-    pcd_after = o3d.geometry.PointCloud()
-    pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
-    metrics = DW2F.evaluate_psnr(pcd_before, pcd_after, verbose=False)
-    return xyz_after, metrics['mse'], metrics['psnr']
-
-def find_matching_alpha(pcd_before, xyz_orig, medium_indices, watermark_bits, target_mse, initial_a):
-    if target_mse <= 0: return xyz_orig.copy()
-    print(f"\n[ElZein] ターゲットMSE ({target_mse:.8e}) に合わせた 'a' を自動探索中...")
-    
-    # 手順1: ブランケット探索による上限の決定（TARGET_PSNRがどんな値でも対応できるようにするため）
-    high_a = initial_a
-    for _ in range(20):
-        _, mse, _ = run_embedding_elzein(pcd_before, xyz_orig, medium_indices, watermark_bits, high_a)
-        if mse >= target_mse:
-            break
-        high_a *= 2.0
-    
-    # 手順2: 二分探索による精密な決定
-    low_a = 0.0
-    best_a = high_a
-    best_xyz_after = None
-    best_psnr = 0
-    
-    for _ in range(30):
-        mid_a = (low_a + high_a) / 2
-        try:
-            xyz_after, mse, psnr = run_embedding_elzein(pcd_before, xyz_orig, medium_indices, watermark_bits, mid_a)
-        except Exception as e:
-            print(f"探索エラー: {e}")
-            break
-            
-        if mse < target_mse:
-            low_a = mid_a
-        else:
-            high_a = mid_a
-            
-        best_a = mid_a
-        best_xyz_after = xyz_after
-        best_psnr = psnr
-        
-        # MSE誤差0.01%未満で最適とみなす
-        if abs(mse - target_mse) / target_mse < 0.0001:
-            break
-            
-    print(f"--> [ElZein] 最適化完了: optimal a = {best_a:.6e}, 実測PSNR = {best_psnr:.2f}dB")
-    return best_xyz_after
-
-def attack_and_extract_elzein(xyz_orig, xyz_after, watermark_bits, attack_type, attack_param, seed):
-    xyz_att = apply_attack(xyz_after, attack_type, attack_param, seed)
-    try:
-        extracted_bits = DW1ELZ.extract_watermark_elzein(xyz_att, xyz_orig, n_points=len(watermark_bits), k=BASELINE_KNN_K, verbose=False)
-    except Exception as e:
-        print(f"ElZein抽出エラー: {e}")
-        extracted_bits = []
-    _, ber = DW2F.evaluate_robustness(watermark_bits, extracted_bits, verbose=False)
-    return ber
-
-# ================= 提案手法の関数 =================
-def run_embedding_proposed(pcd_before, xyz_orig, labels, watermark_bits, min_sp, max_sp, beta):
-    xyz_after = DW1X1.embed_watermark_m4(
-        xyz_orig, labels, watermark_bits,
-        beta=beta, graph_mode=GRAPH_MODE, k=KNN_K, radius=GRAPH_RADIUS,
-        flatness_weighting=FLATNESS_WEIGHTING, k_neighbors=K_NEIGHBORS,
-        min_spectre=min_sp, max_spectre=max_sp
-    )
-    pcd_after = o3d.geometry.PointCloud()
-    pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
-    metrics = DW2F.evaluate_psnr(pcd_before, pcd_after, verbose=False)
-    mse, psnr = metrics['mse'], metrics['psnr']
-    return xyz_after, mse, psnr
-
-def find_matching_beta(pcd_before, xyz_orig, labels, watermark_bits, min_sp, max_sp, target_mse, initial_beta, band_name):
-    if target_mse <= 0: return xyz_orig.copy()
-    print(f"\n[Proposed - {band_name}] ターゲットMSE に合わせた 'beta' を自動探索中...")
-    
-    # 手順1: ブランケット探索による上限の決定
-    high_beta = initial_beta
-    for _ in range(20):
-        _, mse, _ = run_embedding_proposed(pcd_before, xyz_orig, labels, watermark_bits, min_sp, max_sp, high_beta)
-        if mse >= target_mse:
-            break
-        high_beta *= 2.0
-    
-    # 手順2: 二分探索による精密な決定
-    low_beta = 0.0
-    best_beta = high_beta
-    best_xyz_after = None
-    best_psnr = 0
-    
+    low = 0.0
     for _ in range(40):
-        mid_beta = (low_beta + high_beta) / 2
-        xyz_after, mse, psnr = run_embedding_proposed(pcd_before, xyz_orig, labels, watermark_bits, min_sp, max_sp, mid_beta)
-        
+        strength = (low + high) / 2.0
+        candidate = embed_function(strength)
+        mse, psnr = embedding_quality(original, candidate)
+        best_vertices, best_mse, best_psnr = candidate, mse, psnr
         if mse < target_mse:
-            low_beta = mid_beta
+            low = strength
         else:
-            high_beta = mid_beta
-            
-        best_beta = mid_beta
-        best_xyz_after = xyz_after
-        best_psnr = psnr
-        
-        # MSE誤差0.03%未満で最適とみなす
-        if abs(mse - target_mse) / target_mse < 0.0003:
+            high = strength
+        if abs(mse - target_mse) / target_mse < 3e-4:
             break
-            
-    print(f"--> [{band_name}] 最適化完了: optimal beta = {best_beta:.6e}, 実測PSNR = {best_psnr:.2f}dB")
-    return best_xyz_after
+    print(f"[{label}] strength={strength:.6e}, PSNR={best_psnr:.2f} dB")
+    return best_vertices
 
-def attack_and_extract_proposed(xyz_orig, xyz_after, labels, watermark_bits, min_sp, max_sp, attack_type, attack_param, seed):
-    xyz_att = apply_attack(xyz_after, attack_type, attack_param, seed)
-    extracted_bits = DW1X1.extract_watermark_m4(
-        xyz_att, xyz_orig, labels, len(watermark_bits),
-        graph_mode=GRAPH_MODE, k=KNN_K, radius=GRAPH_RADIUS,
-        min_spectre=min_sp, max_spectre=max_sp
+
+def embed_proposed(vertices, labels, bits, min_spectrum, max_spectrum, beta):
+    return DW1X1.embed_watermark_m4(
+        vertices,
+        labels,
+        bits,
+        beta=beta,
+        graph_mode=GRAPH_MODE,
+        k=KNN_K,
+        radius=GRAPH_RADIUS,
+        flatness_weighting=FLATNESS_WEIGHTING,
+        k_neighbors=K_NEIGHBORS,
+        min_spectre=min_spectrum,
+        max_spectre=max_spectrum,
     )
-    _, ber = DW2F.evaluate_robustness(watermark_bits, extracted_bits, verbose=False)
-    return ber
 
-# ================= メイン実行 =================
+
+def visual_quality_scores(original, marked):
+    """いずれも高いほど高品質となる実装上のスコアを返す。"""
+    before = point_cloud(original)
+    after = point_cloud(marked)
+    return {
+        "PC-MSDM": DW2F.evaluate_pc_msdm(before, after, verbose=False),
+        "AngularSimilarity": DW2F.evaluate_angular_similarity(
+            before, after, verbose=False
+        ),
+        "P2D": DW2F.evaluate_p2d(before, after, verbose=False),
+        "PointSSIM": DW2F.evaluate_point_ssim(before, after, verbose=False),
+    }
+
+
+def accuracy(reference_bits, extracted_bits):
+    _, ber = DW2F.evaluate_robustness(
+        reference_bits, np.asarray(extracted_bits).reshape(-1).tolist(), verbose=False
+    )
+    return 1.0 - ber
+
+
+def load_mesh():
+    if os.path.exists(INPUT_FILE):
+        mesh = o3d.io.read_triangle_mesh(INPUT_FILE)
+    else:
+        print(f"{INPUT_FILE} がないため、三角形球メッシュで代替します。")
+        mesh = o3d.geometry.TriangleMesh.create_sphere(radius=1.0, resolution=70)
+    if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
+        raise ValueError("The comparison requires a triangle mesh (PLY/OFF/OBJ).")
+
+    vertices = np.asarray(mesh.vertices).copy()
+    triangles = np.asarray(mesh.triangles).copy()
+    vertices, triangles, _ = DW2F.remove_unreferenced_vertices(vertices, triangles)
+    pcd = DW2F.normalize_point_cloud(point_cloud(vertices))
+    return np.asarray(pcd.points).copy(), triangles
+
+
+def prepare_methods(vertices, triangles, bits, target_mse):
+    """各方式を一度埋め込み、方式名・頂点・抽出関数をまとめる。"""
+    methods = {}
+
+    print("\n[ElZein] degree-6 face-normal FCM...")
+    selected = DW1ELZ.local_feature_clustering(vertices, triangles, verbose=False)
+    marked = match_strength(
+        vertices,
+        lambda a: embed_elzein_from_selection(vertices, selected, bits, a),
+        target_mse,
+        1e-3,
+        "ElZein",
+    )
+    methods["ElZein"] = {
+        "vertices": marked,
+        "extract": lambda attacked: DW1ELZ.extract_watermark_elzein_mesh(
+            attacked, vertices, triangles, len(bits), verbose=False
+        ),
+    }
+
+    print("\n[Hu] surface EMD embedding...")
+    hu_marked, hu_key, hu_alpha = DW1HU.embed_watermark_hu_mesh(
+        vertices,
+        triangles,
+        bits,
+        FideP=HU_FIDEP,
+        T=HU_T,
+        watermark_size=WATERMARK_SIZE,
+        arnold_iterations=HU_ARNOLD_ITERATIONS,
+    )
+    methods["Hu"] = {
+        "vertices": hu_marked,
+        "extract": lambda attacked: DW1HU.extract_watermark_hu_mesh(
+            synchronize_if_needed(attacked, vertices), triangles, hu_key
+        ),
+    }
+    print(f"[Hu] alpha={hu_alpha:.6e}")
+
+    print("\n[Verma] virtual histogram embedding...")
+    verma_marked, verma_key, _ = DW1VER.embed_watermark_verma_mesh(
+        vertices, triangles, bits
+    )
+    methods["Verma"] = {
+        "vertices": verma_marked,
+        "extract": lambda attacked: DW1VER.extract_watermark_verma_mesh(
+            vertices,
+            synchronize_if_needed(attacked, vertices),
+            triangles,
+            key_info=verma_key,
+        ),
+    }
+
+    for cluster_points in CLUSTER_POINTS_PROPOSED:
+        print(f"\n[Proposed] KMeans: approximately {cluster_points} points/cluster...")
+        labels = DW1X1.kmeans_cluster_points(
+            vertices, cluster_point=cluster_points, seed=42
+        )
+        min_size = min(np.count_nonzero(labels == label) for label in np.unique(labels))
+        if min_size < len(bits):
+            print(
+                f"[Warning] smallest cluster={min_size}, watermark bits={len(bits)}."
+            )
+        for band, min_spectrum, max_spectrum, initial_beta in BANDS:
+            name = f"P-{band}({cluster_points})"
+            marked = match_strength(
+                vertices,
+                lambda beta, lab=labels, lo=min_spectrum, hi=max_spectrum: embed_proposed(
+                    vertices, lab, bits, lo, hi, beta
+                ),
+                target_mse,
+                initial_beta,
+                name,
+            )
+            methods[name] = {
+                "vertices": marked,
+                "extract": lambda attacked, lab=labels, lo=min_spectrum, hi=max_spectrum: (
+                    DW1X1.extract_watermark_m4(
+                        attacked,
+                        vertices,
+                        lab,
+                        len(bits),
+                        graph_mode=GRAPH_MODE,
+                        k=KNN_K,
+                        radius=GRAPH_RADIUS,
+                        min_spectre=lo,
+                        max_spectre=hi,
+                    )
+                ),
+            }
+
+    print("\nEmbedding quality (before attacks):")
+    for name, method in methods.items():
+        _, psnr = embedding_quality(vertices, method["vertices"])
+        print(f"  {name:<20} PSNR={psnr:.2f} dB")
+    return methods
+
+
+def run_robustness_experiment(methods, bits, attack_type, parameters):
+    results = {name: [] for name in methods}
+    for parameter in parameters:
+        print(f"  {attack_type}={parameter}: {NUM_TRIALS} trials")
+        sums = {name: 0.0 for name in methods}
+        for trial in range(NUM_TRIALS):
+            seed = 42 + trial
+            for name, method in methods.items():
+                attacked = apply_attack(
+                    method["vertices"], attack_type, parameter, seed
+                )
+                try:
+                    extracted = method["extract"](attacked)
+                    sums[name] += accuracy(bits, extracted)
+                except Exception as error:
+                    print(f"    [{name}] extraction failed: {error}")
+        for name in methods:
+            results[name].append(sums[name] / NUM_TRIALS)
+    return results
+
+
+def run_visual_quality_experiment(methods, original):
+    totals = {
+        name: {metric: 0.0 for metric in (
+            "PC-MSDM", "AngularSimilarity", "P2D", "PointSSIM"
+        )}
+        for name in methods
+    }
+    for _ in range(NUM_TRIALS):
+        for name, method in methods.items():
+            scores = visual_quality_scores(original, method["vertices"])
+            for metric, value in scores.items():
+                totals[name][metric] += value
+    return {
+        name: {metric: value / NUM_TRIALS for metric, value in scores.items()}
+        for name, scores in totals.items()
+    }
+
+
+def print_robustness_table(attack_type, parameters, results):
+    names = list(results)
+    width = 16
+    print(f"\nRobustness: {attack_type}, Accuracy (1-BER), trials={NUM_TRIALS}")
+    print(" | ".join(f"{value:<{width}}" for value in ["Parameter", *names]))
+    print("-" * ((width + 3) * (len(names) + 1)))
+    for index, parameter in enumerate(parameters):
+        values = [str(parameter), *(f"{results[name][index]:.4f}" for name in names)]
+        print(" | ".join(f"{value:<{width}}" for value in values))
+
+
+def print_visual_quality_table(results):
+    metrics = ("PC-MSDM", "AngularSimilarity", "P2D", "PointSSIM")
+    print(f"\nVisual quality without attack, trials={NUM_TRIALS} (higher is better)")
+    print(" | ".join(f"{value:<20}" for value in ("Method", *metrics)))
+    print("-" * 115)
+    for name, scores in results.items():
+        values = [name, *(f"{scores[metric]:.6f}" for metric in metrics)]
+        print(" | ".join(f"{value:<20}" for value in values))
+
+
 def main():
     np.random.seed(42)
-    
-    print("=== データとパラメータの準備 ===")
-    if os.path.exists(INPUT_FILE):
-        pcd = o3d.io.read_point_cloud(INPUT_FILE)
-    else:
-        print(f"入力ファイル {INPUT_FILE} が見つからないため、球体モデルで代替します。")
-        mesh = o3d.geometry.TriangleMesh.create_sphere(radius=1.0)
-        pcd = mesh.sample_points_poisson_disk(number_of_points=15000)
-        
-    pcd = DW2F.normalize_point_cloud(pcd)
-    xyz_orig = np.asarray(pcd.points)
-    
+    vertices, triangles = load_mesh()
     try:
-        watermark_bits = DW2F.image_to_bitarray(IMAGE_PATH, n=WATERMARK_SIZE)
-    except Exception as e:
-        print(f"画像読み込みエラー ({e})。ランダムなビット列を生成します。")
-        watermark_bits = np.random.randint(0, 2, WATERMARK_SIZE * WATERMARK_SIZE).tolist()
-    
-    target_mse = calculate_target_mse(pcd, TARGET_PSNR)
-    print(f"目標 PSNR: {TARGET_PSNR} dB -> 許容 MSE: {target_mse:.8e}")
+        bits = DW2F.image_to_bitarray(IMAGE_PATH, n=WATERMARK_SIZE)
+    except Exception as error:
+        print(f"Watermark load failed ({error}); using reproducible random bits.")
+        bits = np.random.randint(0, 2, WATERMARK_SIZE**2).tolist()
 
-    # ===============================================
-    # 1. ElZein手法の前計算（FCMクラスタリング）
-    print("\nElZein手法のクラスタリング実行中...")
-    medium_indices = DW1ELZ.local_feature_clustering(xyz_orig, k=BASELINE_KNN_K, verbose=False)
-    init_a = 0.001
-    xyz_after_elzein = find_matching_alpha(pcd, xyz_orig, medium_indices, watermark_bits, target_mse, init_a)
+    target_mse = calculate_target_mse(vertices, TARGET_PSNR)
+    print(
+        f"Mesh: {len(vertices)} vertices, {len(triangles)} faces; "
+        f"watermark={len(bits)} bits; target PSNR={TARGET_PSNR} dB"
+    )
+    methods = prepare_methods(vertices, triangles, bits, target_mse)
 
-    # ===============================================
-    # 2. 提案手法の前計算（クラスタサイズごとに実行）
-    proposed_configs = {} # key: display_name, value: (xyz_after, labels, min_sp, max_sp)
-    
-    for cp in CLUSTER_POINTS_PROPOSED:
-        print(f"\n[Proposed] 1クラスタ {cp} 点の KMeansクラスタリング実行中...")
-        labels_prop = DW1X1.kmeans_cluster_points(xyz_orig, cluster_point=cp, seed=42)
-        min_cluster_size = np.min([np.sum(labels_prop == c) for c in np.unique(labels_prop)])
-        if min_cluster_size < len(watermark_bits):
-            print(f"警告: 最小クラスタの点数({min_cluster_size})が埋め込みビット数({len(watermark_bits)})を満たしていません！1つのクラスタ内にすべてのビット列が格納できず、一部のビットが情報落ちする可能性があります。")
-            
-        for band_name, min_sp, max_sp, init_beta in BANDS:
-            display_name = f"P-{band_name.strip()}({cp})"
-            xyz_after = find_matching_beta(pcd, xyz_orig, labels_prop, watermark_bits, min_sp, max_sp, target_mse, init_beta, display_name)
-            proposed_configs[display_name] = (xyz_after, labels_prop, min_sp, max_sp)
+    for experiment_type, parameters in EXPERIMENTS:
+        if experiment_type == "visual_quality":
+            print_visual_quality_table(
+                run_visual_quality_experiment(methods, vertices)
+            )
+        else:
+            results = run_robustness_experiment(
+                methods, bits, experiment_type, parameters
+            )
+            print_robustness_table(experiment_type, parameters, results)
 
-    # ===============================================
-    # 3. 攻撃耐性の比較ループ
-    results_all = {}
-    
-    for attack_type, params in ATTACKS:
-        print(f"\n=== 攻撃テスト開始 (攻撃種類: {attack_type}) ===")
-        results = {"ElZein": []}
-        for name in proposed_configs.keys():
-            results[name] = []
-            
-        for param in params:
-            print(f"  -> テスト中: {attack_type} = {param} ({NUM_TRIALS}回平均)...")
-            
-            acc_elzein_sum = 0.0
-            acc_prop_sums = {name: 0.0 for name in proposed_configs.keys()}
-            
-            for trial in range(NUM_TRIALS):
-                seed = 42 + trial
-                
-                # ElZein
-                ber_elzein = attack_and_extract_elzein(xyz_orig, xyz_after_elzein, watermark_bits, attack_type, param, seed)
-                acc_elzein_sum += (1.0 - ber_elzein)
-                
-                # 提案手法(全構成)
-                for name, (xyz_emb, labels_prop, min_sp, max_sp) in proposed_configs.items():
-                    ber_prop = attack_and_extract_proposed(xyz_orig, xyz_emb, labels_prop, watermark_bits, min_sp, max_sp, attack_type, param, seed)
-                    acc_prop_sums[name] += (1.0 - ber_prop)
-                    
-            # 正答率(Accuracy)として保存
-            results["ElZein"].append(acc_elzein_sum / NUM_TRIALS)
-            for name in proposed_configs.keys():
-                results[name].append(acc_prop_sums[name] / NUM_TRIALS)
-                
-        results_all[attack_type] = (params, results)
-
-    # ===============================================
-    # 4. 比較結果の表出力
-    for attack_type, (params, results) in results_all.items():
-        print(f"\n{'='*95}")
-        print(f"   Robustness Comparison Table (Target PSNR: {TARGET_PSNR} dB | Model: {os.path.basename(INPUT_FILE)})")
-        print(f"   Metric: Accuracy (1-BER) | Attack Type: {attack_type} (Trials: {NUM_TRIALS}) | Bits: {len(watermark_bits)}")
-        print(f"{'='*95}")
-        
-        headers = ["Att Param", "ElZein"] + list(proposed_configs.keys())
-        header_str = " | ".join([f"{h:<14}" for h in headers])
-        print(header_str)
-        print("-" * 95)
-        
-        for i, param in enumerate(params):
-            row_vals = [f"{param:<14.4f}", f"{results['ElZein'][i]:<14.4f}"]
-            for name in proposed_configs.keys():
-                row_vals.append(f"{results[name][i]:<14.4f}")
-            print(" | ".join(row_vals))
-        print(f"{'='*95}\n")
 
 if __name__ == "__main__":
     main()
