@@ -74,7 +74,7 @@ if __name__ == "__main__":
     embed_time = time.time() - start_embed
 
     # OP. ノイズ攻撃 (論文では0.1%〜0.5%を検証 [Source 9: Sect 5.3.1])
-    xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.0, mode='gaussian', seed=42)
+    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.0, mode='gaussian', seed=42)
     
     # OP. スムージング攻撃 (論文ではLaplacian smoothingを検証 [Source 9: Sect 5.3.2])
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=10)
@@ -97,17 +97,19 @@ if __name__ == "__main__":
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
     pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    # DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
-    # DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
-    # DW2F.evaluate_point_ssim(pcd_before, pcd_after)
-    # DW2F.visualize_embedded_points(xyz, xyz_after)
-    # o3d.visualization.draw_geometries([pcd_after])
+    DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
+    DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+    DW2F.evaluate_point_ssim(pcd_before, pcd_after)
+    DW2F.visualize_embedded_points(xyz, xyz_after)
+    o3d.visualization.draw_geometries([pcd_after])
 
     # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
     DW2F.bitarray_to_image(extracted_bits, n=n, save_path="hu_recovered.bmp")
+    
+    # 8. その他
     print(f"[Hu] 埋込強度 alpha: {alpha:.6e}")
     print(f"[Hu] 埋込位置数: {len(key_info.embedding_indices)} "
           f"({T_rep} repetitions x {len(watermark_bits)} bits)")

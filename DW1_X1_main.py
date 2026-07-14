@@ -1,7 +1,7 @@
 import numpy as np
 import open3d as o3d
 import DW2_func as DW2F
-import DW1_M4_func as DW1M4
+import DW1_X1_func as DW1X1
 import time
 
 if __name__ == "__main__":
@@ -70,13 +70,13 @@ if __name__ == "__main__":
 
     # 4. クラスタリング
     start = time.time()
-    labels = DW1M4.kmeans_cluster_points(xyz, cluster_point=cluster_point)
-    # labels = DW1M4.region_growing_cluster_points(xyz)
-    # labels = DW1M4.ransac_cluster_points(xyz)
-    # labels = DW1M4.split_large_clusters(xyz, labels, limit_points=3000)
+    labels = DW1X1.kmeans_cluster_points(xyz, cluster_point=cluster_point)
+    # labels = DW1X1.region_growing_cluster_points(xyz)
+    # labels = DW1X1.ransac_cluster_points(xyz)
+    # labels = DW1X1.split_large_clusters(xyz, labels, limit_points=3000)
 
     # 5. 単多数決方式の埋め込み
-    xyz_after = DW1M4.embed_watermark_m4(
+    xyz_after = DW1X1.embed_watermark_m4(
         xyz, labels, watermark_bits,
         beta=beta,
         graph_mode=graph_mode, k=k, radius=radius,
@@ -103,7 +103,7 @@ if __name__ == "__main__":
 
     # 6. 単多数決方式の抽出
     start = time.time()
-    extracted_bits = DW1M4.extract_watermark_m4(
+    extracted_bits = DW1X1.extract_watermark_m4(
         xyz_after, xyz, labels, watermark_bits_length,
         graph_mode=graph_mode, k=k, radius=radius,
         min_spectre=min_spectre, max_spectre=max_spectre
@@ -128,5 +128,7 @@ if __name__ == "__main__":
     print(f"抽出ビット：{len(extracted_bits)}")
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
     DW2F.bitarray_to_image(extracted_bits, n=n, save_path="recovered.bmp")
+
+    # 9. その他
     print(f"埋込時間: {embed_time:.2f}秒")
     print(f"抽出時間: {extract_time:.2f}秒\n")
