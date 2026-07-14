@@ -1,7 +1,7 @@
 import numpy as np
 import open3d as o3d
 import DW2_func as DW2F
-import DW1_M4_func as DW1M4
+import DW1_X1_func as DW1X1
 import DW1_ELZ_func as DW1ELZ
 import os
 
@@ -161,7 +161,7 @@ def attack_and_extract_elzein(xyz_orig, xyz_after, watermark_bits, attack_type, 
 
 # ================= 提案手法の関数 =================
 def run_embedding_proposed(pcd_before, xyz_orig, labels, watermark_bits, min_sp, max_sp, beta):
-    xyz_after = DW1M4.embed_watermark_m4(
+    xyz_after = DW1X1.embed_watermark_m4(
         xyz_orig, labels, watermark_bits,
         beta=beta, graph_mode=GRAPH_MODE, k=KNN_K, radius=GRAPH_RADIUS,
         flatness_weighting=FLATNESS_WEIGHTING, k_neighbors=K_NEIGHBORS,
@@ -213,7 +213,7 @@ def find_matching_beta(pcd_before, xyz_orig, labels, watermark_bits, min_sp, max
 
 def attack_and_extract_proposed(xyz_orig, xyz_after, labels, watermark_bits, min_sp, max_sp, attack_type, attack_param, seed):
     xyz_att = apply_attack(xyz_after, attack_type, attack_param, seed)
-    extracted_bits = DW1M4.extract_watermark_m4(
+    extracted_bits = DW1X1.extract_watermark_m4(
         xyz_att, xyz_orig, labels, len(watermark_bits),
         graph_mode=GRAPH_MODE, k=KNN_K, radius=GRAPH_RADIUS,
         min_spectre=min_sp, max_spectre=max_sp
@@ -258,7 +258,7 @@ def main():
     
     for cp in CLUSTER_POINTS_PROPOSED:
         print(f"\n[Proposed] 1クラスタ {cp} 点の KMeansクラスタリング実行中...")
-        labels_prop = DW1M4.kmeans_cluster_points(xyz_orig, cluster_point=cp, seed=42)
+        labels_prop = DW1X1.kmeans_cluster_points(xyz_orig, cluster_point=cp, seed=42)
         min_cluster_size = np.min([np.sum(labels_prop == c) for c in np.unique(labels_prop)])
         if min_cluster_size < len(watermark_bits):
             print(f"警告: 最小クラスタの点数({min_cluster_size})が埋め込みビット数({len(watermark_bits)})を満たしていません！1つのクラスタ内にすべてのビット列が格納できず、一部のビットが情報落ちする可能性があります。")

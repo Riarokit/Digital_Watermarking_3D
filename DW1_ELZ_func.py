@@ -1,191 +1,198 @@
+"""El Zein et al. の Method II を用いた FCM ベース3Dメッシュ透かし法。
+
+点群の k-NN は用いず、三角形メッシュの 1-ring と面法線からキャリア
+頂点を選択する。実験用の二値画像には式(6)を双極値化して適用する。
+"""
+
 import numpy as np
-import open3d as o3d
-from sklearn.neighbors import NearestNeighbors
 import skfuzzy as fuzz
-import DW2_func as DW2F
 from scipy.spatial import cKDTree
 
-def local_feature_clustering(xyz, k=6, verbose=False):
-    """
-    ■ 1. 局所特徴量の算出とクラスタリング
-    入力点群に対してk-NNで近傍点を取得し、法線ベクトルとその近傍平均法線ベクトルのなす角を計算する。
-    1次元の角度データにFCM(c=3)を適用し、中間の粗さ(Medium roughness)のクラスタに属する頂点インデックスを返す。
-    """
-    # 1. & 2. 点群の法線推定
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(xyz)
-    # k傍近傍点で法線ベクトルを算出 (PCA)
-    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamKNN(knn=k))
-    # 法線の向きを揃える（角度計算のばらつきを抑えるため）
-    pcd.orient_normals_consistent_tangent_plane(k)
-    normals = np.asarray(pcd.normals)
-    
-    # 近傍点のインデックスを取得するためのk-NN (自身を含めるため k+1)
-    nn = NearestNeighbors(n_neighbors=k+1).fit(xyz)
-    _, indices = nn.kneighbors(xyz)
-    
-    theta = np.zeros(len(xyz))
-    
-    # 各頂点について、その法線と近傍点の平均法線とのなす角θを計算
-    for i in range(len(xyz)):
-        n_v = normals[i]
-        # indices[i, 1:] は自身を除いた近傍k個のインデックス
-        neighbor_idx = indices[i, 1:]
-        n_neighbors = normals[neighbor_idx]
-        
-        # 近傍点の平均法線ベクトル
-        n_avg = np.mean(n_neighbors, axis=0)
-        norm_avg = np.linalg.norm(n_avg)
-        
-        # ゼロベクトル割りを防ぐ
-        if norm_avg > 1e-12:
-            n_avg = n_avg / norm_avg
-        else:
-            n_avg = n_v
-            
-        # なす角θの計算
-        cos_theta = np.dot(n_v, n_avg)
-        cos_theta = np.clip(cos_theta, -1.0, 1.0)
-        theta[i] = np.arccos(cos_theta)
-        
-    # 3. 角度θに対してscikit-fuzzyを用いたFuzzy C-Means (FCM) を適用 (c=3)
-    # skfuzzyは(n_features, n_samples)の形状を期待するためリシェイプする
-    data = theta.reshape(1, -1)
-    c = 3
-    m = 2.0
-    error = 1e-5
-    maxiter = 100
-    
-    cntr, U, u0, d, jm, p, fpc = fuzz.cluster.cmeans(
-        data, c, m, error, maxiter, init=None, seed=42
+
+def _validate_mesh(vertices, triangles):
+    vertices = np.asarray(vertices, dtype=float)
+    triangles = np.asarray(triangles, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3:
+        raise ValueError("vertices must have shape (N, 3).")
+    if triangles.ndim != 2 or triangles.shape[1] != 3:
+        raise ValueError("triangles must have shape (M, 3).")
+    if len(vertices) == 0 or len(triangles) == 0:
+        raise ValueError("A non-empty triangle mesh is required.")
+    if triangles.min() < 0 or triangles.max() >= len(vertices):
+        raise ValueError("triangles contain an invalid vertex index.")
+    return vertices, triangles
+
+
+def _mesh_topology(vertices, triangles):
+    """頂点ごとの隣接頂点と接続面、および単位面法線を返す。"""
+    neighbors = [set() for _ in range(len(vertices))]
+    incident_faces = [[] for _ in range(len(vertices))]
+    face_vectors = np.cross(
+        vertices[triangles[:, 1]] - vertices[triangles[:, 0]],
+        vertices[triangles[:, 2]] - vertices[triangles[:, 0]],
     )
-    
-    centroids = cntr.flatten()
-    # Uは(c, n_samples)なので、各点のラベルは列方向の最大値インデックス
-    labels = np.argmax(U, axis=0)
-    
-    # 4. 3つのクラスタの重心を比較し、「真ん中（Medium roughness）」を選択
-    sorted_centroid_indices = np.argsort(centroids)
-    medium_cluster_id = sorted_centroid_indices[1]  # 0:低, 1:中, 2:高
-    
+    lengths = np.linalg.norm(face_vectors, axis=1)
+    valid_faces = lengths > 1e-12
+    face_normals = np.zeros_like(face_vectors)
+    face_normals[valid_faces] = face_vectors[valid_faces] / lengths[valid_faces, None]
+
+    for face_index, (i, j, k) in enumerate(triangles):
+        neighbors[i].update((j, k))
+        neighbors[j].update((i, k))
+        neighbors[k].update((i, j))
+        if valid_faces[face_index]:
+            incident_faces[i].append(face_index)
+            incident_faces[j].append(face_index)
+            incident_faces[k].append(face_index)
+    return neighbors, incident_faces, face_normals
+
+
+def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
+    """論文 Sec. 3.1 に従い、中程度の局所形状を持つ次数6頂点を返す。
+
+    各候補の特徴量は、接続する6面の単位法線とそれらの平均法線との間の
+    6角度 ``(theta_1, ..., theta_6)`` である。FCM の3クラスタを角度の
+    平均値で low / moderate / high に並べ、moderate の頂点を選ぶ。
+    """
+    vertices, triangles = _validate_mesh(vertices, triangles)
+    neighbors, incident_faces, face_normals = _mesh_topology(vertices, triangles)
+
+    candidate_indices = []
+    features = []
+    for vertex_index, faces in enumerate(incident_faces):
+        # 論文の degree 6 は 1-ring の隣接頂点数。通常の閉じた多様体では
+        # 接続面数も6となるため、特徴ベクトル長を保証するため両方を確認する。
+        if len(neighbors[vertex_index]) != 6 or len(faces) != 6:
+            continue
+        normals = face_normals[faces]
+        average_normal = normals.mean(axis=0)
+        average_length = np.linalg.norm(average_normal)
+        if average_length <= 1e-12:
+            continue
+        average_normal /= average_length
+        angles = np.arccos(np.clip(normals @ average_normal, -1.0, 1.0))
+        candidate_indices.append(vertex_index)
+        features.append(np.sort(angles))  # 面の格納順に依存しない表現
+
+    if len(candidate_indices) < 3:
+        raise ValueError(
+            "FCM requires at least three valid degree-6 vertices; "
+            f"found {len(candidate_indices)}."
+        )
+
+    feature_matrix = np.asarray(features, dtype=float)
+    centers, memberships, *_ = fuzz.cluster.cmeans(
+        feature_matrix.T, c=3, m=2.0, error=1e-5, maxiter=300, seed=seed
+    )
+    labels = np.argmax(memberships, axis=0)
+    roughness = centers.mean(axis=1)
+    ordered_clusters = np.argsort(roughness)
+    moderate_cluster = ordered_clusters[1]
+    selected = np.asarray(candidate_indices, dtype=np.int64)[labels == moderate_cluster]
+    selected.sort()
+
     if verbose:
-        print("\n--- クラスタリング結果 (FCM, c=3) ---")
-        names = ["Low roughness", "Medium roughness", "High roughness"]
-        for i, c_idx in enumerate(sorted_centroid_indices):
-            cluster_theta = theta[labels == c_idx]
-            count = len(cluster_theta)
-            if count > 0:
-                t_mean = np.mean(cluster_theta)
-                t_min = np.min(cluster_theta)
-                t_max = np.max(cluster_theta)
-                print(f"{names[i]:<17} : 点数={count:<5}, θ平均={t_mean:.4f}, 境界(min~max)=[{t_min:.4f} ~ {t_max:.4f}]")
-            else:
-                print(f"{names[i]:<17} : 点数=0")
-        print("-------------------------------------")
+        names = ("low", "moderate", "high")
+        print("\n--- El Zein FCM clustering (degree-6 vertices) ---")
+        for name, cluster_id in zip(names, ordered_clusters):
+            count = int(np.count_nonzero(labels == cluster_id))
+            print(
+                f"{name:<8}: vertices={count:<6} "
+                f"mean angle={roughness[cluster_id]:.6f} rad"
+            )
+        print("--------------------------------------------------")
+    return selected
 
-    # 中間クラスタの頂点インデックスを返す
-    medium_cluster_indices = np.where(labels == medium_cluster_id)[0]
-    return medium_cluster_indices
 
-def embed_watermark_elzein(xyz, watermark_bits, n_points, a, k=6, verbose=True):
-    """
-    ■ 2. 透かしの埋め込み
-    中間クラスタの頂点をn個選び、各頂点座標に対してビットに応じて+aまたは-aを足し引きして透かしを埋め込む。
-    """
-    xyz_new = xyz.copy()
-    
-    # 1. 中間クラスタの頂点インデックスを取得する
-    medium_indices = local_feature_clustering(xyz, k=k, verbose=verbose)
-    
-    # 2. 頂点数が足りない場合はエラー
-    if len(medium_indices) < n_points:
-        raise ValueError(f"Target points ({n_points}) exceeds available points in medium cluster ({len(medium_indices)}).")
-        
-    # 中間クラスタの頂点をn_points個のグループに分割
-    groups = np.array_split(medium_indices, n_points)
-    
-    # 3. 各グループの全頂点に対して同じビットを埋め込む
-    for i in range(n_points):
-        bit = watermark_bits[i]
-        group_indices = groups[i]
-        
-        for idx in group_indices:
-            v = xyz_new[idx]
-            if bit == 1:
-                xyz_new[idx] = v + a
-            elif bit == 0:
-                xyz_new[idx] = v - a
-                
-    # 4. 透かしが埋め込まれた新しい点群を返す
-    return xyz_new
+def embed_watermark_elzein_mesh(
+    vertices, triangles, watermark_bits, n_points, a, verbose=True
+):
+    """従来の Method II 適応版を、実メッシュ上で実行する。
 
-def extract_watermark_elzein(xyz_after, xyz, n_points, k=6, verbose=False):
+    論文の式(6)は ``V*=V+a*w`` であり法線方向の変位ではない。本実験では
+    画像の2値ビットを扱うため、従来実装どおり 1/0 を +a/-a の双極値へ
+    対応させ、moderate クラスタをグループ分割して冗長に埋め込む。
     """
-    ■ 3. 透かしの抽出
-    元の点群から中間クラスタを特定し、埋め込み後点群との座標の差分からビットを抽出する(完全ノンブラインド型)。
-    """
-    # 0. 攻撃を受けた点群をオリジナル点群に1対1対応させて再サンプリング（同期・補完）
-    xyz_after = synchronize_point_cloud(xyz_after, xyz, verbose=True)
+    vertices, triangles = _validate_mesh(vertices, triangles)
+    bits = np.asarray(watermark_bits, dtype=np.uint8).reshape(-1)
+    if np.any((bits != 0) & (bits != 1)):
+        raise ValueError("watermark_bits must contain only 0 and 1.")
+    if n_points != len(bits):
+        raise ValueError("n_points must equal the number of watermark bits.")
 
-    # 1. クラスタリングは元の点群(xyz)を用いて、埋め込み対象の頂点インデックスを特定
-    medium_indices = local_feature_clustering(xyz, k=k, verbose=verbose)
-    
-    if len(medium_indices) < n_points:
-        raise ValueError("Not enough points in medium cluster during extraction.")
-        
-    # 中間クラスタの頂点をn_points個のグループに再分割
-    groups = np.array_split(medium_indices, n_points)
-    extracted_bits = []
-    
-    # 2. 各グループ内で差分からビットを判定し、多数決で抽出
-    for i in range(n_points):
-        group_indices = groups[i]
-        votes = []
-        
-        for idx in group_indices:
-            v_w = xyz_after[idx]
-            v_o = xyz[idx]
-            
-            # 差分ベクトル diff = v_w - v_o
-            diff = v_w - v_o
-            diff_sum = diff.sum()
-            
-            # 抽出
-            if diff_sum > 0:
-                votes.append(1)
-            else:
-                votes.append(0)
-                
-        # 3. グループ内多数決
-        counts = {0: votes.count(0), 1: votes.count(1)}
-        if counts[1] > counts[0]:
-            extracted_bits.append(1)
-        else:
-            extracted_bits.append(0)
-            
-    # 4. 抽出されたnビットの配列を返す
-    return extracted_bits
+    selected = local_feature_clustering(vertices, triangles, verbose=verbose)
+    if len(selected) < n_points:
+        raise ValueError(
+            f"Watermark needs {n_points} groups, but the moderate cluster "
+            f"contains only {len(selected)}."
+        )
+    marked = vertices.copy()
+    groups = np.array_split(selected, n_points)
+    for bit, group in zip(bits, groups):
+        # np.ones(3) を加えることが論文の V(x,y,z)+a*w に対応する。
+        displacement = a if bit else -a
+        marked[group] += displacement
+    return marked
+
+
+def extract_watermark_elzein_mesh(
+    marked_vertices, original_vertices, triangles, n_points, verbose=False
+):
+    """Method II の非ブラインド部分を座標差の多数決で抽出する。"""
+    original_vertices, triangles = _validate_mesh(original_vertices, triangles)
+    marked_vertices = np.asarray(marked_vertices, dtype=float)
+    if marked_vertices.shape != original_vertices.shape:
+        marked_vertices = synchronize_point_cloud(
+            marked_vertices, original_vertices, verbose=verbose
+        )
+    selected = local_feature_clustering(
+        original_vertices, triangles, verbose=verbose
+    )
+    if len(selected) < n_points:
+        raise ValueError("Not enough moderate degree-6 vertices during extraction.")
+    groups = np.array_split(selected, n_points)
+    extracted = []
+    for group in groups:
+        coordinate_sums = (marked_vertices[group] - original_vertices[group]).sum(axis=1)
+        extracted.append(int(np.count_nonzero(coordinate_sums > 0) > len(group) / 2))
+    return extracted
+
 
 def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
-    """
-    攻撃後点群をオリジナル点群と完全に同期（同じ点数・順序）させる。
-    """
+    """攻撃後点群を原頂点へ最近傍対応させ、欠損位置を原座標で補う。"""
     if distance_threshold is None:
-        max_bound = np.max(xyz_orig, axis=0)
-        min_bound = np.min(xyz_orig, axis=0)
-        scale = np.linalg.norm(max_bound - min_bound)
+        scale = np.linalg.norm(np.ptp(xyz_orig, axis=0))
         distance_threshold = scale * 0.01
-
     tree = cKDTree(xyz_att)
-    dists, indices = tree.query(xyz_orig, k=1)
-    
-    xyz_synced = xyz_att[indices].copy()
-    
-    missing_mask = dists > distance_threshold
-    xyz_synced[missing_mask] = xyz_orig[missing_mask]
-    
+    distances, indices = tree.query(xyz_orig, k=1)
+    synchronized = xyz_att[indices].copy()
+    missing = distances > distance_threshold
+    synchronized[missing] = xyz_orig[missing]
     if verbose:
-        n_missing = np.sum(missing_mask)
-        print(f"[Sync] 再サンプリング完了。補完された欠損点数: {n_missing} / {len(xyz_orig)}")
+        print(
+            f"[Sync] compensated missing vertices: "
+            f"{np.count_nonzero(missing)} / {len(xyz_orig)}"
+        )
+    return synchronized
 
-    return xyz_synced
+
+def embed_watermark_elzein(
+    vertices, triangles, watermark_bits, n_points, a, k=6, verbose=True
+):
+    """旧関数名との互換ラッパー。kはdegree=6固定のため使用しない。"""
+    if k != 6:
+        raise ValueError("The paper defines feature vectors only for degree 6.")
+    return embed_watermark_elzein_mesh(
+        vertices, triangles, watermark_bits, n_points, a, verbose
+    )
+
+
+def extract_watermark_elzein(
+    marked_vertices, original_vertices, triangles, n_points, k=6, verbose=False
+):
+    """旧関数名との互換ラッパー。"""
+    if k != 6:
+        raise ValueError("The paper defines feature vectors only for degree 6.")
+    return extract_watermark_elzein_mesh(
+        marked_vertices, original_vertices, triangles, n_points, verbose
+    )
