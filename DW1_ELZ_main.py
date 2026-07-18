@@ -110,8 +110,12 @@ if __name__ == "__main__":
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
+    unknown_count = int(np.count_nonzero(np.asarray(extracted_bits) < 0))
+    if unknown_count:
+        print(f"[ElZein] undecodable watermark bits: {unknown_count}")
+    display_bits = np.where(np.asarray(extracted_bits) < 0, 0, extracted_bits)
     DW2F.bitarray_to_image(
-        extracted_bits, n=n, save_path="elzein_recovered.bmp"
+        display_bits, n=n, save_path="elzein_recovered.bmp"
     )
 
     # 8. 固有評価

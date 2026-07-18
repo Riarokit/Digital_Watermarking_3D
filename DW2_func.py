@@ -169,22 +169,73 @@ def find_unreferenced_vertex_indices(vertices, triangles):
     return np.flatnonzero(mask)
 
 
-def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
-    """攻撃後点群を原頂点へ最近傍対応させ、欠損位置を原座標で補う。"""
+DEFAULT_SYNC_DISTANCE_FACTOR = 1.5
+
+
+def match_point_cloud_to_original(
+    xyz_att,
+    xyz_orig,
+    distance_threshold=None,
+    distance_factor=DEFAULT_SYNC_DISTANCE_FACTOR,
+    verbose=True,
+):
+    """Resample attacked points onto original vertices with distance rejection.
+
+    Multiple original vertices may refer to the same attacked point.  This is
+    intentional for voxel-downsampled point clouds.  Rows whose nearest point
+    is farther than the density-adaptive threshold are marked invalid and are
+    never filled with original coordinates.
+    """
     xyz_att = np.asarray(xyz_att, dtype=np.float64)
     xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
     if xyz_att.ndim != 2 or xyz_att.shape[1] != 3 or len(xyz_att) == 0:
         raise ValueError("xyz_att must have shape (N, 3) and be non-empty.")
     if xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
         raise ValueError("xyz_orig must have shape (N, 3).")
+    if distance_factor <= 0:
+        raise ValueError("distance_factor must be positive.")
+
+    attacked_tree = cKDTree(xyz_att)
     if distance_threshold is None:
-        distance_threshold = np.linalg.norm(np.ptp(xyz_orig, axis=0)) * 0.01
+        if len(xyz_att) < 2:
+            raise ValueError(
+                "At least two attacked points are required to estimate spacing."
+            )
+        neighbor_distances, _ = attacked_tree.query(xyz_att, k=2)
+        spacing = neighbor_distances[:, 1]
+        spacing = spacing[np.isfinite(spacing) & (spacing > 1e-12)]
+        if len(spacing) == 0:
+            raise ValueError(
+                "Cannot estimate spacing from duplicate attacked points."
+            )
+        distance_threshold = float(distance_factor * np.median(spacing))
     if distance_threshold < 0:
         raise ValueError("distance_threshold must be non-negative.")
-    tree = cKDTree(xyz_att)
-    distances, indices = tree.query(xyz_orig, k=1)
-    synchronized = xyz_att[indices].copy()
-    missing = distances > distance_threshold
+
+    distances, indices = attacked_tree.query(xyz_orig, k=1)
+    valid = np.isfinite(distances) & (distances <= distance_threshold)
+    matched = xyz_att[indices].copy()
+    matched[~valid] = np.nan
+    if verbose:
+        print(
+            f"[Match] threshold={distance_threshold:.6e}, "
+            f"unmatched={np.count_nonzero(~valid)} / {len(xyz_orig)}"
+        )
+    return matched, valid, distances, float(distance_threshold)
+
+
+def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
+    """攻撃後点群を原頂点へ最近傍対応させ、欠損位置を原座標で補う。"""
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    if distance_threshold is None:
+        distance_threshold = np.linalg.norm(np.ptp(xyz_orig, axis=0)) * 0.01
+    synchronized, valid, _, _ = match_point_cloud_to_original(
+        xyz_att,
+        xyz_orig,
+        distance_threshold=distance_threshold,
+        verbose=False,
+    )
+    missing = ~valid
     synchronized[missing] = xyz_orig[missing]
     if verbose:
         print(f"[Sync] compensated missing vertices: {np.count_nonzero(missing)} / {len(xyz_orig)}")

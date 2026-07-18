@@ -573,6 +573,7 @@ def extract_watermark_x1(
     min_spectre: float = 0.0,
     max_spectre: float = 1.0,
     skip_threshold_mode: str = "half",  # "half" or "none"
+    synchronization_factor: float = DW2F.DEFAULT_SYNC_DISTANCE_FACTOR,
 ):
     """
     埋め込み前点群 xyz_orig から疑似平面を再構築し、
@@ -585,9 +586,14 @@ def extract_watermark_x1(
     xyz_emb = np.asarray(xyz_emb, dtype=float)
     xyz_orig = np.asarray(xyz_orig, dtype=float)
     if len(xyz_emb) != len(xyz_orig):
-        xyz_emb = DW2F.synchronize_point_cloud(
-            xyz_emb, xyz_orig, verbose=True
+        xyz_emb, valid_vertices, _, _ = DW2F.match_point_cloud_to_original(
+            xyz_emb,
+            xyz_orig,
+            distance_factor=synchronization_factor,
+            verbose=True,
         )
+    else:
+        valid_vertices = np.ones(len(xyz_orig), dtype=bool)
     if embed_bits_length <= 0:
         return []
 
@@ -601,6 +607,8 @@ def extract_watermark_x1(
     for c in np.unique(labels):
         idx = np.where(labels == c)[0]
         if len(idx) <= skip_threshold:
+            continue
+        if not np.all(valid_vertices[idx]):
             continue
 
         pts_orig = xyz_orig[idx]
@@ -653,9 +661,11 @@ def extract_watermark_x1(
     # 多数決
     extracted_bits = []
     for votes in bit_lists:
-        if len(votes) == 0:
-            extracted_bits.append(0)
+        ones = votes.count(1)
+        zeros = votes.count(0)
+        if len(votes) == 0 or ones == zeros:
+            extracted_bits.append(-1)
         else:
-            extracted_bits.append(1 if votes.count(1) > votes.count(0) else 0)
+            extracted_bits.append(1 if ones > zeros else 0)
 
     return extracted_bits

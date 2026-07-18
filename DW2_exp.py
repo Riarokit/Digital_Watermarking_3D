@@ -23,11 +23,12 @@ IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
 NUM_TRIALS = 5
 VERBOSE_TRIAL_LOGS = False
+SYNC_DISTANCE_FACTOR = 1.5
 
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    # "ElZein",
+    "ElZein",
     "Hu",
     # "Verma",
     "Proposed",
@@ -35,15 +36,15 @@ COMPARED_METHODS = [
 
 # visual_quality は攻撃を加えず、4種類の品質指標を NUM_TRIALS 回測る。
 EXPERIMENTS = [
-    ("noise", [0.5, 1.0, 1.5, 2.0]),
-    # ("smoothing", [10, 20, 30, 40]),
+    # ("noise", [2.0]),
+    ("smoothing", [20, 40]),
     # ("cropping", [0.9, 0.7, 0.5, 0.3]),
-    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
+    # ("downsampling", [2.0]),
     # ("visual_quality", [None]),
 ]
 
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.2
+SMOOTHING_LAMBDA = 0.3
 SMOOTHING_K = 6
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
@@ -317,6 +318,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                     triangles,
                     key_info=elzein_key,
                     verbose=False,
+                    synchronization_factor=SYNC_DISTANCE_FACTOR,
                 )
             ),
         }
@@ -389,6 +391,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                             radius=GRAPH_RADIUS,
                             min_spectre=lo,
                             max_spectre=hi,
+                            synchronization_factor=SYNC_DISTANCE_FACTOR,
                         )
                     ),
                 }

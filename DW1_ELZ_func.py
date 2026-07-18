@@ -142,15 +142,24 @@ def _saved_carriers(key_info):
     return carriers
 
 
-def _synchronize_if_needed(marked_vertices, original_vertices, verbose):
+def _synchronize_if_needed(
+    marked_vertices,
+    original_vertices,
+    verbose,
+    synchronization_factor,
+):
     marked_vertices = np.asarray(marked_vertices, dtype=float)
     if marked_vertices.ndim != 2 or marked_vertices.shape[1] != 3:
         raise ValueError("marked_vertices must have shape (N, 3).")
     if marked_vertices.shape == original_vertices.shape:
-        return marked_vertices
-    return DW2F.synchronize_point_cloud(
-        marked_vertices, original_vertices, verbose=verbose
+        return marked_vertices, np.ones(len(original_vertices), dtype=bool)
+    synchronized, valid, _, _ = DW2F.match_point_cloud_to_original(
+        marked_vertices,
+        original_vertices,
+        distance_factor=synchronization_factor,
+        verbose=verbose,
     )
+    return synchronized, valid
 
 
 def embed_watermark_elzein_mesh(
@@ -202,22 +211,30 @@ def extract_watermark_elzein_mesh(
     triangles,
     key_info,
     verbose=False,
+    synchronization_factor=DW2F.DEFAULT_SYNC_DISTANCE_FACTOR,
 ):
     """保存キャリアの座標差をグループ内多数決して抽出する。"""
     original_vertices, triangles = _validate_mesh(original_vertices, triangles)
-    marked_vertices = _synchronize_if_needed(
-        marked_vertices, original_vertices, verbose=verbose
+    marked_vertices, valid_vertices = _synchronize_if_needed(
+        marked_vertices,
+        original_vertices,
+        verbose=verbose,
+        synchronization_factor=synchronization_factor,
     )
     carriers = _saved_carriers(key_info)
     groups = np.array_split(carriers, key_info.watermark_length)
     extracted = []
     for group in groups:
+        group = group[valid_vertices[group]]
+        if len(group) == 0:
+            extracted.append(-1)
+            continue
         coordinate_sums = (
             marked_vertices[group] - original_vertices[group]
         ).sum(axis=1)
-        extracted.append(
-            int(np.count_nonzero(coordinate_sums > 0) > len(group) / 2)
-        )
+        ones = int(np.count_nonzero(coordinate_sums > 0))
+        zeros = len(group) - ones
+        extracted.append(-1 if ones == zeros else int(ones > zeros))
     return extracted
 
 

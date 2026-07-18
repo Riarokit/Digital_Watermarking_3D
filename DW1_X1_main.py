@@ -127,7 +127,11 @@ if __name__ == "__main__":
     print(f"埋込ビット：{len(watermark_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
-    DW2F.bitarray_to_image(extracted_bits, n=n, save_path="recovered.bmp")
+    unknown_count = int(np.count_nonzero(np.asarray(extracted_bits) < 0))
+    if unknown_count:
+        print(f"[Proposed] undecodable watermark bits: {unknown_count}")
+    display_bits = np.where(np.asarray(extracted_bits) < 0, 0, extracted_bits)
+    DW2F.bitarray_to_image(display_bits, n=n, save_path="recovered.bmp")
 
     # 9. 固有評価
     print(f"埋込時間: {embed_time:.2f}秒")
