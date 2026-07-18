@@ -19,16 +19,16 @@ TARGET_PSNR = 60.0
 INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/dragon_vrip_res2.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
-IMAGE_PATH = "watermark8.bmp"
-WATERMARK_SIZE = 8
+IMAGE_PATH = "watermark16.bmp"
+WATERMARK_SIZE = 16
 NUM_TRIALS = 5
 VERBOSE_TRIAL_LOGS = False
 
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    "ElZein",
-    "Hu",
+    # "ElZein",
+    # "Hu",
     # "Verma",
     "Proposed",
 ]
@@ -60,12 +60,12 @@ FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
 BANDS = [
-    ("Full", 0.0, 1.0, 1.6e-3),
+    # ("Full", 0.0, 1.0, 1.6e-3),
     ("Low", 0.0, 0.2, 3.6e-3),
-    ("High", 0.8, 1.0, 3.6e-3),
+    # ("High", 0.8, 1.0, 3.6e-3),
 ]
 
-# Hu手法（論文実装のパラメータ）
+# Hu手法
 HU_FIDEP = 115.0
 HU_T = 25
 HU_ARNOLD_ITERATIONS = 20
@@ -212,7 +212,7 @@ def match_hu_fidep(vertices, triangles, bits, target_mse):
 
 
 def embed_proposed(vertices, labels, bits, min_spectrum, max_spectrum, beta):
-    return DW1X1.embed_watermark_m4(
+    return DW1X1.embed_watermark_x1(
         vertices,
         labels,
         bits,
@@ -379,7 +379,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                 methods[name] = {
                     "vertices": marked,
                     "extract": lambda attacked, lab=labels, lo=min_spectrum, hi=max_spectrum: (
-                        DW1X1.extract_watermark_m4(
+                        DW1X1.extract_watermark_x1(
                             attacked,
                             vertices,
                             lab,

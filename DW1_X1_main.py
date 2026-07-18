@@ -76,7 +76,7 @@ if __name__ == "__main__":
     # labels = DW1X1.split_large_clusters(xyz, labels, limit_points=3000)
 
     # 5. 単多数決方式の埋め込み
-    xyz_after = DW1X1.embed_watermark_m4(
+    xyz_after = DW1X1.embed_watermark_x1(
         xyz, labels, watermark_bits,
         beta=beta,
         graph_mode=graph_mode, k=k, radius=radius,
@@ -103,7 +103,7 @@ if __name__ == "__main__":
 
     # 6. 単多数決方式の抽出
     start = time.time()
-    extracted_bits = DW1X1.extract_watermark_m4(
+    extracted_bits = DW1X1.extract_watermark_x1(
         xyz_after, xyz, labels, watermark_bits_length,
         graph_mode=graph_mode, k=k, radius=radius,
         min_spectre=min_spectre, max_spectre=max_spectre
