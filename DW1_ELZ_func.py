@@ -151,8 +151,6 @@ def _synchronize_if_needed(
     marked_vertices = np.asarray(marked_vertices, dtype=float)
     if marked_vertices.ndim != 2 or marked_vertices.shape[1] != 3:
         raise ValueError("marked_vertices must have shape (N, 3).")
-    if marked_vertices.shape == original_vertices.shape:
-        return marked_vertices, np.ones(len(original_vertices), dtype=bool)
     synchronized, valid, _, _ = DW2F.match_point_cloud_to_original(
         marked_vertices,
         original_vertices,

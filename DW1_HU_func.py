@@ -32,7 +32,6 @@ class HuWatermarkKey:
     embedding_signatures: np.ndarray
     matching_threshold_raw: float
     matching_threshold_canonical: float
-    original_vertex_count: int
     bit_indices: np.ndarray
     repetitions: np.ndarray
     watermark_size: int
@@ -405,7 +404,6 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
             0.75 * _nearest_neighbor_scale(canonical_watermarked),
             canonical_extent * 1e-5,
         ),
-        original_vertex_count=len(watermarked),
         bit_indices=bit_indices,
         repetitions=reps,
         watermark_size=watermark_size,
@@ -454,11 +452,6 @@ def _greedy_unique_match(reference, candidate, distance_threshold, neighbors=16)
 
 def _match_embedding_positions(vertices, key):
     """保存座標を使い、頂点順序変更後の対応頂点を取得する。"""
-    # 頂点順序が保持され、座標も近い通常ケースをまず使う。
-    direct = key.embedding_indices
-    if len(vertices) == key.original_vertex_count:
-        return direct.copy(), np.ones(len(direct), dtype=bool)
-
     # Cropping/downsampling normally preserves the original coordinate frame.
     # Try raw saved extreme positions before PCA-based registration.
     best_indices, best_distances = _greedy_unique_match(

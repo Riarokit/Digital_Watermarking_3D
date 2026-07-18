@@ -9,6 +9,9 @@ from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbo
 import scipy.sparse as sp
 from PIL import Image
 
+# 攻撃後点群の代表的な点間隔に対する、対応許容距離の倍率
+DEFAULT_SYNC_DISTANCE_FACTOR = 5.0
+
 # =========================================================
 #  前処理関数群
 # =========================================================
@@ -169,9 +172,6 @@ def find_unreferenced_vertex_indices(vertices, triangles):
     return np.flatnonzero(mask)
 
 
-DEFAULT_SYNC_DISTANCE_FACTOR = 1.5
-
-
 def match_point_cloud_to_original(
     xyz_att,
     xyz_orig,
@@ -179,12 +179,19 @@ def match_point_cloud_to_original(
     distance_factor=DEFAULT_SYNC_DISTANCE_FACTOR,
     verbose=True,
 ):
-    """Resample attacked points onto original vertices with distance rejection.
+    """攻撃後点群を元頂点位置へ多対1対応させ、遠すぎる対応を棄却する。
 
-    Multiple original vertices may refer to the same attacked point.  This is
-    intentional for voxel-downsampled point clouds.  Rows whose nearest point
-    is farther than the density-adaptive threshold are marked invalid and are
-    never filled with original coordinates.
+    各元頂点から最も近い攻撃後点を探索するため、複数の元頂点が同じ
+    攻撃後点を参照してよい。この多対1対応により、ボクセルダウン
+    サンプリング後の代表点を元点群と同じ頂点数の信号として扱える。
+
+    ``distance_threshold`` が未指定の場合は、攻撃後点群の最近傍点間
+    距離の中央値に ``distance_factor`` を掛けて閾値を決める。最近傍
+    点までの距離が閾値を超えた元頂点は対応なしとし、元座標による
+    補完は行わない。
+
+    戻り値は、元頂点順に並べた対応後座標、有効対応マスク、対応距離、
+    実際に使用した距離閾値である。対応なし座標には NaN を設定する。
     """
     xyz_att = np.asarray(xyz_att, dtype=np.float64)
     xyz_orig = np.asarray(xyz_orig, dtype=np.float64)

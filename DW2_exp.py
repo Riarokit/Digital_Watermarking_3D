@@ -23,7 +23,7 @@ IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
 NUM_TRIALS = 5
 VERBOSE_TRIAL_LOGS = False
-SYNC_DISTANCE_FACTOR = 1.5
+SYNC_DISTANCE_FACTOR = 5.0
 
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
@@ -36,10 +36,10 @@ COMPARED_METHODS = [
 
 # visual_quality は攻撃を加えず、4種類の品質指標を NUM_TRIALS 回測る。
 EXPERIMENTS = [
-    # ("noise", [2.0]),
-    ("smoothing", [20, 40]),
-    # ("cropping", [0.9, 0.7, 0.5, 0.3]),
-    # ("downsampling", [2.0]),
+    # ("noise", [0.5, 0.8, 1.0, 1.2, 1.5]),
+    ("smoothing", [10, 20, 30, 40, 50]),
+    # ("cropping", [0.9, 0.7, 0.5, 0.4, 0.3]),
+    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
     # ("visual_quality", [None]),
 ]
 

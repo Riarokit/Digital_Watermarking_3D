@@ -90,10 +90,10 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.75, mode='gaussian', seed=42)
+    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.5, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.2, iterations=30, k=6)
+    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=40, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
@@ -113,14 +113,16 @@ if __name__ == "__main__":
     # 7. 視覚品質評価
     pcd_after = o3d.geometry.PointCloud()
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
-    pcd_after.colors = o3d.utility.Vector3dVector(colors)
+    if len(xyz_after) == len(colors):
+        pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    DW2F.evaluate_psnr(pcd_before, pcd_after)
-    DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
-    DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
-    DW2F.evaluate_p2d(pcd_before, pcd_after)
-    DW2F.evaluate_point_ssim(pcd_before, pcd_after)
-    # DW2F.visualize_embedded_points(xyz, xyz_after)
+    if len(xyz_after) == len(xyz):
+        DW2F.evaluate_psnr(pcd_before, pcd_after)
+        DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+        DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
+        DW2F.evaluate_p2d(pcd_before, pcd_after)
+        DW2F.evaluate_point_ssim(pcd_before, pcd_after)
+        # DW2F.visualize_embedded_points(xyz, xyz_after)
     o3d.visualization.draw_geometries([pcd_after])
 
     # 8. ロバスト性評価

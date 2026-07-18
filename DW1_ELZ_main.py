@@ -73,7 +73,7 @@ if __name__ == "__main__":
     embed_time = time.time() - start_embed
 
     # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.5, mode="gaussian", seed=42)
+    xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.5, mode="gaussian", seed=42)
 
     # OP. スムージング攻撃
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.2, iterations=30, k=6)
@@ -87,7 +87,7 @@ if __name__ == "__main__":
     # 5. 抽出処理
     start_extract = time.time()
     extracted_bits = DW1ELZ.extract_watermark_elzein_mesh(
-        xyz_after, xyz, triangles, key_info=key_info
+        xyz_after, xyz, triangles, key_info=key_info, verbose=True
     )
     extract_time = time.time() - start_extract
 
@@ -103,7 +103,7 @@ if __name__ == "__main__":
         DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
         DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)
-        DW2F.visualize_embedded_points(xyz, xyz_after)
+        # DW2F.visualize_embedded_points(xyz, xyz_after)
     o3d.visualization.draw_geometries([pcd_after])
 
     # 7. ロバスト性評価

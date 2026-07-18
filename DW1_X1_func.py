@@ -585,15 +585,12 @@ def extract_watermark_x1(
     """
     xyz_emb = np.asarray(xyz_emb, dtype=float)
     xyz_orig = np.asarray(xyz_orig, dtype=float)
-    if len(xyz_emb) != len(xyz_orig):
-        xyz_emb, valid_vertices, _, _ = DW2F.match_point_cloud_to_original(
-            xyz_emb,
-            xyz_orig,
-            distance_factor=synchronization_factor,
-            verbose=True,
-        )
-    else:
-        valid_vertices = np.ones(len(xyz_orig), dtype=bool)
+    xyz_emb, valid_vertices, _, _ = DW2F.match_point_cloud_to_original(
+        xyz_emb,
+        xyz_orig,
+        distance_factor=synchronization_factor,
+        verbose=True,
+    )
     if embed_bits_length <= 0:
         return []
 

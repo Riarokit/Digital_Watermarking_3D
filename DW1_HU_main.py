@@ -101,6 +101,8 @@ if __name__ == "__main__":
     if len(xyz_after) == len(xyz):
         DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
         DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+        DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
+        DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)
         DW2F.visualize_embedded_points(xyz, xyz_after)
     o3d.visualization.draw_geometries([pcd_after])
