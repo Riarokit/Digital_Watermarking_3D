@@ -1,15 +1,27 @@
-"""El Zein Method II の Portion 2 を二値・冗長化した従来 SOFT 実装。
+"""El Zein et al. の Portion 2 を基にした比較手法。
 
-moderate クラスタをビット数個のグループへ分割し、各グループへ同じ
-ビットを反復埋め込みして、抽出時に多数決する。頂点数が変わった場合は
-最近傍による点群同期も行う。これらは原論文に明記されていない拡張で、
-過去の実験結果を再現するために残す。
+FCMのmoderateクラスタに属する全キャリアをビットごとのグループに
+分割し、各座標へ一律に正負の変位を与える。抽出はグループ内多数決で
+行い、キャリアインデックスは埋め込み時のキーから再利用する。
 """
+
+from dataclasses import dataclass
 
 import numpy as np
 import skfuzzy as fuzz
 
 import DW2_func as DW2F
+
+
+@dataclass(frozen=True)
+class ElZeinWatermarkKey:
+    """埋め込み時のキャリア位置と抽出設定。"""
+
+    mode: str
+    watermark_length: int
+    scaling_factor: float
+    seed: int
+    carrier_indices: tuple
 
 
 def _validate_mesh(vertices, triangles):
@@ -26,8 +38,23 @@ def _validate_mesh(vertices, triangles):
     return vertices, triangles
 
 
+def _validate_bits(watermark_bits):
+    raw_bits = np.asarray(watermark_bits).reshape(-1)
+    if len(raw_bits) == 0:
+        raise ValueError("watermark_bits must contain at least one bit.")
+    if np.any((raw_bits != 0) & (raw_bits != 1)):
+        raise ValueError("watermark_bits must contain only 0 and 1.")
+    return raw_bits.astype(np.uint8)
+
+
+def _validate_strength(a):
+    if not np.isfinite(a) or a <= 0.0:
+        raise ValueError("a must be a positive finite scaling factor.")
+    return float(a)
+
+
 def _mesh_topology(vertices, triangles):
-    """頂点ごとの隣接頂点と接続面、および単位面法線を返す。"""
+    """頂点ごとの隣接頂点、接続面、単位面法線を返す。"""
     neighbors = [set() for _ in range(len(vertices))]
     incident_faces = [[] for _ in range(len(vertices))]
     face_vectors = np.cross(
@@ -37,7 +64,9 @@ def _mesh_topology(vertices, triangles):
     lengths = np.linalg.norm(face_vectors, axis=1)
     valid_faces = lengths > 1e-12
     face_normals = np.zeros_like(face_vectors)
-    face_normals[valid_faces] = face_vectors[valid_faces] / lengths[valid_faces, None]
+    face_normals[valid_faces] = (
+        face_vectors[valid_faces] / lengths[valid_faces, None]
+    )
 
     for face_index, (i, j, k) in enumerate(triangles):
         neighbors[i].update((j, k))
@@ -51,7 +80,7 @@ def _mesh_topology(vertices, triangles):
 
 
 def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
-    """論文 Sec. 3.1 に従い、中程度の局所形状を持つ次数6頂点を返す。"""
+    """論文Sec. 3.1に従い、moderate形状の次数6頂点を返す。"""
     vertices, triangles = _validate_mesh(vertices, triangles)
     neighbors, incident_faces, face_normals = _mesh_topology(vertices, triangles)
 
@@ -84,7 +113,9 @@ def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
     roughness = centers.mean(axis=1)
     ordered_clusters = np.argsort(roughness)
     moderate_cluster = ordered_clusters[1]
-    selected = np.asarray(candidate_indices, dtype=np.int64)[labels == moderate_cluster]
+    selected = np.asarray(candidate_indices, dtype=np.int64)[
+        labels == moderate_cluster
+    ]
     selected.sort()
 
     if verbose:
@@ -100,45 +131,85 @@ def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
     return selected
 
 
-def embed_watermark_elzein_mesh(
-    vertices, triangles, watermark_bits, n_points, a, verbose=True
-):
-    """Portion 2を二値化し、頂点グループへ冗長に埋め込む。"""
-    vertices, triangles = _validate_mesh(vertices, triangles)
-    bits = np.asarray(watermark_bits, dtype=np.uint8).reshape(-1)
-    if np.any((bits != 0) & (bits != 1)):
-        raise ValueError("watermark_bits must contain only 0 and 1.")
-    if n_points != len(bits):
-        raise ValueError("n_points must equal the number of watermark bits.")
+def _saved_carriers(key_info):
+    if not isinstance(key_info, ElZeinWatermarkKey):
+        raise TypeError("key_info must be returned by the El Zein embedder.")
+    if key_info.mode != "elzein":
+        raise ValueError(f"Invalid El Zein key mode: {key_info.mode!r}.")
+    carriers = np.asarray(key_info.carrier_indices, dtype=np.int64)
+    if len(carriers) < key_info.watermark_length:
+        raise ValueError("The saved carrier list is shorter than the watermark.")
+    return carriers
 
-    selected = local_feature_clustering(vertices, triangles, verbose=verbose)
-    if len(selected) < n_points:
-        raise ValueError(
-            f"Watermark needs {n_points} groups, but the moderate cluster "
-            f"contains only {len(selected)}."
+
+def _synchronize_if_needed(marked_vertices, original_vertices, verbose):
+    marked_vertices = np.asarray(marked_vertices, dtype=float)
+    if marked_vertices.ndim != 2 or marked_vertices.shape[1] != 3:
+        raise ValueError("marked_vertices must have shape (N, 3).")
+    if marked_vertices.shape == original_vertices.shape:
+        return marked_vertices
+    return DW2F.synchronize_point_cloud(
+        marked_vertices, original_vertices, verbose=verbose
+    )
+
+
+def embed_watermark_elzein_mesh(
+    vertices,
+    triangles,
+    watermark_bits,
+    a,
+    verbose=True,
+    seed=42,
+    carrier_indices=None,
+):
+    """Portion 2を全moderate頂点へ冗長に埋め込む。"""
+    vertices, triangles = _validate_mesh(vertices, triangles)
+    bits = _validate_bits(watermark_bits)
+    a = _validate_strength(a)
+
+    if carrier_indices is None:
+        carriers = local_feature_clustering(
+            vertices, triangles, verbose=verbose, seed=seed
         )
+    else:
+        carriers = np.asarray(carrier_indices, dtype=np.int64).reshape(-1)
+        if np.any(carriers < 0) or np.any(carriers >= len(vertices)):
+            raise ValueError("carrier_indices contains an invalid vertex index.")
+    if len(carriers) < len(bits):
+        raise ValueError(
+            f"Watermark needs {len(bits)} groups, but the moderate cluster "
+            f"contains only {len(carriers)} vertices."
+        )
+
     marked = vertices.copy()
-    groups = np.array_split(selected, n_points)
+    groups = np.array_split(carriers, len(bits))
     for bit, group in zip(bits, groups):
-        displacement = a if bit else -a
-        marked[group] += displacement
-    return marked
+        marked[group] += a if bit else -a
+
+    key = ElZeinWatermarkKey(
+        mode="elzein",
+        watermark_length=len(bits),
+        scaling_factor=a,
+        seed=int(seed),
+        carrier_indices=tuple(int(index) for index in carriers),
+    )
+    return marked, key
 
 
 def extract_watermark_elzein_mesh(
-    marked_vertices, original_vertices, triangles, n_points, verbose=False
+    marked_vertices,
+    original_vertices,
+    triangles,
+    key_info,
+    verbose=False,
 ):
-    """座標差を各頂点で判定し、グループ内多数決で抽出する。"""
+    """保存キャリアの座標差をグループ内多数決して抽出する。"""
     original_vertices, triangles = _validate_mesh(original_vertices, triangles)
-    marked_vertices = np.asarray(marked_vertices, dtype=float)
-    if marked_vertices.shape != original_vertices.shape:
-        marked_vertices = DW2F.synchronize_point_cloud(
-            marked_vertices, original_vertices, verbose=verbose
-        )
-    selected = local_feature_clustering(original_vertices, triangles, verbose=verbose)
-    if len(selected) < n_points:
-        raise ValueError("Not enough moderate degree-6 vertices during extraction.")
-    groups = np.array_split(selected, n_points)
+    marked_vertices = _synchronize_if_needed(
+        marked_vertices, original_vertices, verbose=verbose
+    )
+    carriers = _saved_carriers(key_info)
+    groups = np.array_split(carriers, key_info.watermark_length)
     extracted = []
     for group in groups:
         coordinate_sums = (
@@ -150,32 +221,9 @@ def extract_watermark_elzein_mesh(
     return extracted
 
 
-def embed_watermark_elzein(
-    vertices, triangles, watermark_bits, n_points, a, k=6, verbose=True
-):
-    """旧関数名との互換ラッパー。"""
-    if k != 6:
-        raise ValueError("The paper defines feature vectors only for degree 6.")
-    return embed_watermark_elzein_mesh(
-        vertices, triangles, watermark_bits, n_points, a, verbose
-    )
-
-
-def extract_watermark_elzein(
-    marked_vertices, original_vertices, triangles, n_points, k=6, verbose=False
-):
-    """旧関数名との互換ラッパー。"""
-    if k != 6:
-        raise ValueError("The paper defines feature vectors only for degree 6.")
-    return extract_watermark_elzein_mesh(
-        marked_vertices, original_vertices, triangles, n_points, verbose
-    )
-
-
 __all__ = [
+    "ElZeinWatermarkKey",
     "local_feature_clustering",
     "embed_watermark_elzein_mesh",
     "extract_watermark_elzein_mesh",
-    "embed_watermark_elzein",
-    "extract_watermark_elzein",
 ]

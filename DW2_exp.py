@@ -1,4 +1,4 @@
-"""El Zein HARD/SOFT・Hu・Verma・提案手法の比較実験スクリプト。"""
+"""El Zein・Hu・Verma・提案手法の比較実験スクリプト。"""
 
 import contextlib
 import io
@@ -7,8 +7,7 @@ import os
 import numpy as np
 import open3d as o3d
 
-import DW1_ELZ_HARD_func as DW1ELZHARD
-import DW1_ELZ_SOFT_func as DW1ELZSOFT
+import DW1_ELZ_func as DW1ELZ
 import DW1_HU_func as DW1HU
 import DW1_VER_func as DW1VER
 import DW1_X1_func as DW1X1
@@ -20,28 +19,27 @@ TARGET_PSNR = 60.0
 INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/dragon_vrip_res2.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
-IMAGE_PATH = "watermark16.bmp"
-WATERMARK_SIZE = 16
+IMAGE_PATH = "watermark8.bmp"
+WATERMARK_SIZE = 8
 NUM_TRIALS = 5
 VERBOSE_TRIAL_LOGS = False
 
-# 使用可能: "ElZein_HARD", "ElZein_SOFT", "Hu", "Verma", "Proposed"
-# 例: COMPARED_METHODS = ["ElZein_HARD", "ElZein_SOFT", "Proposed"]
+# 使用可能: "ElZein", "Hu", "Verma", "Proposed"
+# 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    "ElZein_HARD",
-    "ElZein_SOFT",
+    "ElZein",
     "Hu",
-    "Verma",
+    # "Verma",
     "Proposed",
 ]
 
 # visual_quality は攻撃を加えず、4種類の品質指標を NUM_TRIALS 回測る。
 EXPERIMENTS = [
-    ("noise", [0.2, 0.4, 0.6, 0.8, 1.0]),
-    ("smoothing", [5, 10, 20, 30]),
-    ("cropping", [0.9, 0.7, 0.5, 0.3]),
-    ("downsampling", [0.5, 1.0, 1.5, 2.0]),
-    ("visual_quality", [None]),
+    ("noise", [0.5, 1.0, 1.5, 2.0]),
+    # ("smoothing", [10, 20, 30, 40]),
+    # ("cropping", [0.9, 0.7, 0.5, 0.3]),
+    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
+    # ("visual_quality", [None]),
 ]
 
 NOISE_MODE = "gaussian"
@@ -51,8 +49,7 @@ CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
 
-# El Zein HARD（論文の式(6)で指定された固定値）
-ELZEIN_HARD_A = 0.01
+# El ZeinのFCM乱数シード
 ELZEIN_FCM_SEED = 42
 
 # 提案手法
@@ -137,19 +134,14 @@ def run_trial_call(function, *args, **kwargs):
         return function(*args, **kwargs)
 
 
-def embed_elzein_soft_from_selection(vertices, selected, bits, strength):
-    if len(selected) < len(bits):
-        raise ValueError(
-            f"El Zein SOFT capacity shortage: "
-            f"{len(selected)} carriers for {len(bits)} bits."
-        )
-    marked = vertices.copy()
-    for bit, group in zip(bits, np.array_split(selected, len(bits))):
-        marked[group] += strength if bit else -strength
-    return marked
-
-
-def match_strength(original, embed_function, target_mse, initial_strength, label):
+def match_strength(
+    original,
+    embed_function,
+    target_mse,
+    initial_strength,
+    label,
+    return_strength=False,
+):
     """埋め込み強度を二分探索し、目標MSEに最も近い結果を返す。"""
     high = initial_strength
     best_vertices = embed_function(high)
@@ -176,6 +168,8 @@ def match_strength(original, embed_function, target_mse, initial_strength, label
         if abs(mse - target_mse) / target_mse < 3e-4:
             break
     print(f"[{label}] strength={strength:.6e}, PSNR={best_psnr:.2f} dB")
+    if return_strength:
+        return best_vertices, strength
     return best_vertices
 
 
@@ -273,7 +267,7 @@ def load_mesh():
 def prepare_methods(vertices, triangles, bits, target_mse):
     """各方式を一度埋め込み、方式名・頂点・抽出関数をまとめる。"""
     methods = {}
-    available = {"ElZein_HARD", "ElZein_SOFT", "Hu", "Verma", "Proposed"}
+    available = {"ElZein", "Hu", "Verma", "Proposed"}
     selected_methods = set(COMPARED_METHODS)
     unknown = selected_methods - available
     if unknown:
@@ -284,48 +278,45 @@ def prepare_methods(vertices, triangles, bits, target_mse):
     if not selected_methods:
         raise ValueError("COMPARED_METHODS must contain at least one method.")
 
-    if "ElZein_HARD" in selected_methods:
-        print("\n[ElZein_HARD] strict Method II embedding...")
-        hard_marked, hard_key = DW1ELZHARD.embed_watermark_elzein_hard_mesh(
+    if "ElZein" in selected_methods:
+        print("\n[ElZein] redundant Portion 2 embedding...")
+        elzein_selected = DW1ELZ.local_feature_clustering(
+            vertices, triangles, verbose=False
+        )
+        _, elzein_strength = match_strength(
+            vertices,
+            lambda a: DW1ELZ.embed_watermark_elzein_mesh(
+                vertices,
+                triangles,
+                bits,
+                a=a,
+                verbose=False,
+                seed=ELZEIN_FCM_SEED,
+                carrier_indices=elzein_selected,
+            )[0],
+            target_mse,
+            1e-3,
+            "ElZein",
+            return_strength=True,
+        )
+        marked, elzein_key = DW1ELZ.embed_watermark_elzein_mesh(
             vertices,
             triangles,
             bits,
-            a=ELZEIN_HARD_A,
+            a=elzein_strength,
             verbose=False,
             seed=ELZEIN_FCM_SEED,
+            carrier_indices=elzein_selected,
         )
-        methods["ElZein_HARD"] = {
-            "vertices": hard_marked,
+        methods["ElZein"] = {
+            "vertices": marked,
             "extract": lambda attacked: (
-                DW1ELZHARD.extract_watermark_elzein_hard_mesh(
+                DW1ELZ.extract_watermark_elzein_mesh(
                     attacked,
                     vertices,
                     triangles,
-                    key_info=hard_key,
+                    key_info=elzein_key,
                     verbose=False,
-                )
-            ),
-        }
-
-    if "ElZein_SOFT" in selected_methods:
-        print("\n[ElZein_SOFT] redundant Portion 2 embedding...")
-        elzein_selected = DW1ELZSOFT.local_feature_clustering(
-            vertices, triangles, verbose=False
-        )
-        marked = match_strength(
-            vertices,
-            lambda a: embed_elzein_soft_from_selection(
-                vertices, elzein_selected, bits, a
-            ),
-            target_mse,
-            1e-3,
-            "ElZein_SOFT",
-        )
-        methods["ElZein_SOFT"] = {
-            "vertices": marked,
-            "extract": lambda attacked: (
-                DW1ELZSOFT.extract_watermark_elzein_mesh(
-                    attacked, vertices, triangles, len(bits), verbose=False
                 )
             ),
         }
@@ -407,7 +398,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
         _, psnr = embedding_quality(vertices, method["vertices"])
         method["psnr"] = psnr
         print(f"  {name:<20} PSNR={psnr:.2f} dB")
-        if name in {"ElZein_HARD", "Verma"}:
+        if name == "Verma":
             print(f"    (fixed strength: TARGET_PSNR is ignored for {name})")
     return methods
 
@@ -459,7 +450,7 @@ def run_visual_quality_experiment(methods, original):
 
 def result_method_label(name, methods):
     """固定強度方式の結果ラベルに実測PSNRを付ける。"""
-    if name in {"ElZein_HARD", "Verma"}:
+    if name == "Verma":
         return f"{name} ({methods[name]['psnr']:.2f} dB)"
     return name
 
