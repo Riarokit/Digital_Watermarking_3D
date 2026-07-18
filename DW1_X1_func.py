@@ -582,7 +582,12 @@ def extract_watermark_x1(
     - 疑似平面推定は xyz_orig（埋め込み前）で行う（xyz_embで推定すると透かし変位が平面推定に混入する）。
     - グラフも xyz_orig（クラスタ内座標）で構築する（埋め込み前と一致させる）。
     """
-    xyz_emb = DW2F.synchronize_point_cloud(xyz_emb, xyz_orig, verbose=True)
+    xyz_emb = np.asarray(xyz_emb, dtype=float)
+    xyz_orig = np.asarray(xyz_orig, dtype=float)
+    if len(xyz_emb) != len(xyz_orig):
+        xyz_emb = DW2F.synchronize_point_cloud(
+            xyz_emb, xyz_orig, verbose=True
+        )
     if embed_bits_length <= 0:
         return []
 

@@ -79,10 +79,10 @@ if __name__ == "__main__":
     # OP. スムージング攻撃 (論文ではLaplacian smoothingを検証 [Source 9: Sect 5.3.2])
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=10)
 
-    # OP. 切り取り攻撃（不可視性評価はコメントアウト）
-    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
+    # OP. 切り取り攻撃
+    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.3, mode='axis', axis=0)
 
-    # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
+    # OP. ダウンサンプリング攻撃
     # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.0, seed=42)
 
     # 5. 抽出処理
@@ -95,19 +95,25 @@ if __name__ == "__main__":
     # 6. 視覚品質評価
     pcd_after = o3d.geometry.PointCloud()
     pcd_after.points = o3d.utility.Vector3dVector(xyz_after)
-    pcd_after.colors = o3d.utility.Vector3dVector(colors)
+    if len(xyz_after) == len(colors):
+        pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
-    DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
-    DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
-    DW2F.evaluate_point_ssim(pcd_before, pcd_after)
-    DW2F.visualize_embedded_points(xyz, xyz_after)
+    if len(xyz_after) == len(xyz):
+        DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
+        DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+        DW2F.evaluate_point_ssim(pcd_before, pcd_after)
+        DW2F.visualize_embedded_points(xyz, xyz_after)
     o3d.visualization.draw_geometries([pcd_after])
 
     # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(extracted_bits)}")
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
-    DW2F.bitarray_to_image(extracted_bits, n=n, save_path="hu_recovered.bmp")
+    unknown_count = int(np.count_nonzero(np.asarray(extracted_bits) < 0))
+    if unknown_count:
+        print(f"[Hu] undecodable watermark bits: {unknown_count}")
+    display_bits = np.where(np.asarray(extracted_bits) < 0, 0, extracted_bits)
+    DW2F.bitarray_to_image(display_bits, n=n, save_path="hu_recovered.bmp")
     
     # 8. 固有評価
     print(f"[Hu] 埋込強度 alpha: {alpha:.6e}")

@@ -3,14 +3,16 @@
 論文: J. Hu et al., "Robust 3D watermarking with high
 imperceptibility based on EMD on surfaces", The Visual Computer, 2023.
 
-この実装は点群を再メッシュ化しない。入力メッシュの頂点順序と三角形接続を
-そのまま利用することが、表面 EMD と再現可能な抽出の前提になる。
+埋め込み時は入力メッシュの三角形接続をそのまま利用する。切り取りや
+ダウンサンプリングで接続情報が失われた場合、抽出時に攻撃後点群だけから
+メッシュを再構築し、その表面上で EMD を計算する。
 """
 
 from dataclasses import dataclass
 from itertools import permutations, product
 
 import numpy as np
+import open3d as o3d
 from scipy import sparse
 from scipy.sparse.linalg import MatrixRankWarning, spsolve
 from scipy.spatial import cKDTree
@@ -28,6 +30,9 @@ class HuWatermarkKey:
     embedding_indices: np.ndarray
     embedding_positions: np.ndarray
     embedding_signatures: np.ndarray
+    matching_threshold_raw: float
+    matching_threshold_canonical: float
+    original_vertex_count: int
     bit_indices: np.ndarray
     repetitions: np.ndarray
     watermark_size: int
@@ -49,6 +54,65 @@ def _validate_mesh(vertices, triangles):
     if not np.isfinite(vertices).all():
         raise ValueError("vertices contains NaN or infinity.")
     return vertices, triangles
+
+
+def _reconstruct_mesh_from_points(vertices):
+    """Reconstruct the attacked surface required by Hu's surface EMD."""
+    vertices = np.asarray(vertices, dtype=float)
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) < 4:
+        raise ValueError(
+            "At least four attacked points are required for mesh reconstruction."
+        )
+
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(vertices)
+    distances = np.asarray(point_cloud.compute_nearest_neighbor_distance())
+    distances = distances[np.isfinite(distances) & (distances > 1e-12)]
+    if len(distances) == 0:
+        raise ValueError(
+            "Cannot estimate a reconstruction radius from the attacked points."
+        )
+    average_distance = float(np.mean(distances))
+    point_cloud.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(
+            radius=6.0 * average_distance, max_nn=30
+        )
+    )
+    if len(vertices) > 20:
+        try:
+            point_cloud.orient_normals_consistent_tangent_plane(20)
+        except RuntimeError:
+            pass
+
+    reconstructed = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
+        point_cloud,
+        o3d.utility.DoubleVector(
+            [3.0 * average_distance, 6.0 * average_distance]
+        ),
+    )
+    reconstructed.remove_degenerate_triangles()
+    reconstructed.remove_duplicated_triangles()
+    reconstructed.remove_duplicated_vertices()
+    reconstructed.remove_unreferenced_vertices()
+    reconstructed_vertices = np.asarray(reconstructed.vertices).copy()
+    reconstructed_triangles = np.asarray(reconstructed.triangles).copy()
+    if len(reconstructed_vertices) == 0 or len(reconstructed_triangles) == 0:
+        raise ValueError(
+            "Ball-pivoting failed to reconstruct the attacked triangle mesh."
+        )
+    return reconstructed_vertices, reconstructed_triangles
+
+
+def _prepare_extraction_mesh(vertices, original_triangles):
+    """Use original connectivity only while the original vertex set remains."""
+    vertices = np.asarray(vertices, dtype=float)
+    original_triangles = np.asarray(original_triangles, dtype=np.int64)
+    original_vertex_count = (
+        int(original_triangles.max()) + 1 if len(original_triangles) else 0
+    )
+    if len(vertices) != original_vertex_count:
+        return _reconstruct_mesh_from_points(vertices)
+    return _validate_mesh(vertices, original_triangles)
 
 
 def get_mesh_laplacian(vertices, triangles):
@@ -278,6 +342,17 @@ def _canonical_coordinates(points):
     return centered @ basis
 
 
+def _nearest_neighbor_scale(points):
+    """Return a robust spacing estimate used to reject missing carriers."""
+    points = np.asarray(points, dtype=float)
+    if len(points) < 2:
+        return 0.0
+    distances, _ = cKDTree(points).query(points, k=2)
+    spacing = distances[:, 1]
+    spacing = spacing[np.isfinite(spacing) & (spacing > 1e-12)]
+    return float(np.median(spacing)) if len(spacing) else 0.0
+
+
 def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=25,
                             watermark_size=32, arnold_iterations=20, extreme_parameter=0.8,
                             epsilon=1e-4):
@@ -316,10 +391,21 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
 
     scale = np.divide(rho_new, rho, out=np.zeros_like(rho_new), where=rho > 1e-15)
     watermarked = centered * scale[:, None] + np.mean(vertices, axis=0)
+    canonical_watermarked = _canonical_coordinates(watermarked)
+    raw_extent = np.linalg.norm(np.ptp(watermarked, axis=0))
+    canonical_extent = np.linalg.norm(np.ptp(canonical_watermarked, axis=0))
     key = HuWatermarkKey(
         embedding_indices=embedding_indices,
         embedding_positions=watermarked[embedding_indices].copy(),
-        embedding_signatures=_canonical_coordinates(watermarked)[embedding_indices].copy(),
+        embedding_signatures=canonical_watermarked[embedding_indices].copy(),
+        matching_threshold_raw=max(
+            0.75 * _nearest_neighbor_scale(watermarked), raw_extent * 1e-5
+        ),
+        matching_threshold_canonical=max(
+            0.75 * _nearest_neighbor_scale(canonical_watermarked),
+            canonical_extent * 1e-5,
+        ),
+        original_vertex_count=len(watermarked),
         bit_indices=bit_indices,
         repetitions=reps,
         watermark_size=watermark_size,
@@ -331,53 +417,124 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
     return watermarked, key, alpha
 
 
+def _greedy_unique_match(reference, candidate, distance_threshold, neighbors=16):
+    """Match carriers one-to-one and leave distant carriers unmatched."""
+    reference = np.asarray(reference, dtype=float)
+    candidate = np.asarray(candidate, dtype=float)
+    matched = np.full(len(reference), -1, dtype=np.int64)
+    matched_distances = np.full(len(reference), np.inf, dtype=float)
+    if len(reference) == 0 or len(candidate) == 0:
+        return matched, matched_distances
+
+    k = min(int(neighbors), len(candidate))
+    distances, indices = cKDTree(candidate).query(reference, k=k)
+    if k == 1:
+        distances = distances[:, None]
+        indices = indices[:, None]
+
+    carrier_ids = np.repeat(np.arange(len(reference)), k)
+    candidate_ids = indices.reshape(-1)
+    edge_distances = distances.reshape(-1)
+    allowed = np.isfinite(edge_distances) & (edge_distances <= distance_threshold)
+    order = np.argsort(edge_distances[allowed], kind="stable")
+    carrier_ids = carrier_ids[allowed][order]
+    candidate_ids = candidate_ids[allowed][order]
+    edge_distances = edge_distances[allowed][order]
+
+    candidate_used = np.zeros(len(candidate), dtype=bool)
+    for carrier, vertex, distance in zip(
+        carrier_ids, candidate_ids, edge_distances
+    ):
+        if matched[carrier] < 0 and not candidate_used[vertex]:
+            matched[carrier] = vertex
+            matched_distances[carrier] = distance
+            candidate_used[vertex] = True
+    return matched, matched_distances
+
+
 def _match_embedding_positions(vertices, key):
     """保存座標を使い、頂点順序変更後の対応頂点を取得する。"""
     # 頂点順序が保持され、座標も近い通常ケースをまず使う。
     direct = key.embedding_indices
-    if len(vertices) > int(np.max(direct)):
-        direct_error = np.median(np.linalg.norm(vertices[direct] - key.embedding_positions, axis=1))
-        extent = np.linalg.norm(np.ptp(vertices, axis=0)) + 1e-15
-        if direct_error < extent * 1e-5:
-            return direct
+    if len(vertices) == key.original_vertex_count:
+        return direct.copy(), np.ones(len(direct), dtype=bool)
+
+    # Cropping/downsampling normally preserves the original coordinate frame.
+    # Try raw saved extreme positions before PCA-based registration.
+    best_indices, best_distances = _greedy_unique_match(
+        key.embedding_positions,
+        vertices,
+        key.matching_threshold_raw,
+    )
+    best_valid = best_indices >= 0
+    best_count = int(np.count_nonzero(best_valid))
+    best_error = (
+        float(np.median(best_distances[best_valid])) if best_count else np.inf
+    )
 
     # 頂点並べ替えには座標ベースで対応付ける。さらに PCA 座標の符号・軸置換を
     # 全探索して、平行移動・回転・一様スケールの similarity transform に対応する。
     target_signature = _canonical_coordinates(vertices)
     reference = key.embedding_signatures
-    best_indices, best_error = None, np.inf
     for permutation in permutations(range(3)):
         permuted = target_signature[:, permutation]
         for signs in product((-1.0, 1.0), repeat=3):
             candidate = permuted * np.asarray(signs)
-            tree = cKDTree(candidate)
-            distances, indices = tree.query(reference, k=1)
-            error = float(np.median(distances))
-            if error < best_error:
-                best_error, best_indices = error, indices
-    return np.asarray(best_indices, dtype=np.int64)
+            indices, distances = _greedy_unique_match(
+                reference,
+                candidate,
+                key.matching_threshold_canonical,
+            )
+            valid = indices >= 0
+            count = int(np.count_nonzero(valid))
+            error = float(np.median(distances[valid])) if count else np.inf
+            if count > best_count or (count == best_count and error < best_error):
+                best_indices = indices
+                best_valid = valid
+                best_count = count
+                best_error = error
+    return np.asarray(best_indices, dtype=np.int64), np.asarray(best_valid, dtype=bool)
 
 
 def extract_watermark_hu_mesh(vertices, triangles, key_info):
     """論文 Algorithm 2、式 (12)、式 (13) に基づいて透かしを抽出する。"""
     if not isinstance(key_info, HuWatermarkKey):
         raise TypeError("key_info must be the HuWatermarkKey returned by embed_watermark_hu_mesh.")
-    vertices, triangles = _validate_mesh(vertices, triangles)
+    vertices, triangles = _prepare_extraction_mesh(vertices, triangles)
     centered = vertices - np.mean(vertices, axis=0)
     rho = np.linalg.norm(centered, axis=1)
     rho_max = float(np.max(rho))
     if rho_max <= 1e-15:
         raise ValueError("全頂点が同一点のため、抽出できません。")
     imf1, _ = surface_emd_sifting(vertices, triangles, rho / rho_max, t=key_info.extreme_parameter)
-    matched = _match_embedding_positions(vertices, key_info)
+    matched, valid_carriers = _match_embedding_positions(vertices, key_info)
 
     wm_len = key_info.watermark_size ** 2
-    repeated_signals = np.zeros((key_info.circular_count, wm_len), dtype=np.uint8)
+    vote_count = np.zeros(wm_len, dtype=np.int64)
+    one_count = np.zeros(wm_len, dtype=np.int64)
     # 式 (12): 正なら 1、負なら 0。各 repetition は完全な 1D 透かし列となる。
-    repeated_signals[key_info.repetitions, key_info.bit_indices] = (imf1[matched] > 0).astype(np.uint8)
-    recovered_images = np.asarray([
-        hilbert_signal_to_watermark(row, key_info.watermark_size, key_info.arnold_iterations)
-        for row in repeated_signals
-    ])
+    valid_bits = key_info.bit_indices[valid_carriers]
+    valid_vertices = matched[valid_carriers]
+    np.add.at(vote_count, valid_bits, 1)
+    np.add.at(
+        one_count,
+        valid_bits,
+        (imf1[valid_vertices] > 0).astype(np.int64),
+    )
     # 式 (13): T 枚を画素ごとに多数決する。
-    return (np.sum(recovered_images, axis=0) >= int(np.ceil(key_info.circular_count / 2.0))).astype(np.uint8)
+    # Missing carriers cast no vote. No surviving vote and an exact tie are
+    # represented as -1 so BER evaluation counts an undecodable bit as an error.
+    known_signal = (vote_count > 0) & (2 * one_count != vote_count)
+    recovered_signal = (2 * one_count > vote_count).astype(np.uint8)
+    recovered = hilbert_signal_to_watermark(
+        recovered_signal,
+        key_info.watermark_size,
+        key_info.arnold_iterations,
+    ).astype(np.int8)
+    known = hilbert_signal_to_watermark(
+        known_signal.astype(np.uint8),
+        key_info.watermark_size,
+        key_info.arnold_iterations,
+    ).astype(bool)
+    recovered[~known] = -1
+    return recovered

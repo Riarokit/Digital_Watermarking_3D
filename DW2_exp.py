@@ -28,7 +28,7 @@ VERBOSE_TRIAL_LOGS = False
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
     # "ElZein",
-    # "Hu",
+    "Hu",
     # "Verma",
     "Proposed",
 ]
@@ -328,8 +328,8 @@ def prepare_methods(vertices, triangles, bits, target_mse):
         )
         methods["Hu"] = {
             "vertices": hu_marked,
-            "extract": lambda attacked: DW1HU.extract_watermark_hu_mesh(
-                synchronize_if_needed(attacked, vertices), triangles, hu_key
+            "extract": lambda attacked: (
+                DW1HU.extract_watermark_hu_mesh(attacked, triangles, hu_key)
             ),
         }
 
@@ -411,14 +411,14 @@ def run_robustness_experiment(methods, bits, attack_type, parameters):
         for trial in range(NUM_TRIALS):
             seed = 42 + trial
             for name, method in methods.items():
-                attacked = run_trial_call(
-                    apply_attack,
-                    method["vertices"],
-                    attack_type,
-                    parameter,
-                    seed,
-                )
                 try:
+                    attacked = run_trial_call(
+                        apply_attack,
+                        method["vertices"],
+                        attack_type,
+                        parameter,
+                        seed,
+                    )
                     extracted = run_trial_call(method["extract"], attacked)
                     sums[name] += bit_error_rate(bits, extracted)
                 except Exception as error:
