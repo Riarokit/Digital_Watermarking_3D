@@ -1,11 +1,14 @@
-"""El Zein・Hu・Verma・提案手法を同一メッシュ上で比較する実験スクリプト。"""
+"""El Zein HARD/SOFT・Hu・Verma・提案手法の比較実験スクリプト。"""
 
+import contextlib
+import io
 import os
 
 import numpy as np
 import open3d as o3d
 
-import DW1_ELZ_func as DW1ELZ
+import DW1_ELZ_HARD_func as DW1ELZHARD
+import DW1_ELZ_SOFT_func as DW1ELZSOFT
 import DW1_HU_func as DW1HU
 import DW1_VER_func as DW1VER
 import DW1_X1_func as DW1X1
@@ -20,10 +23,17 @@ INPUT_FILE = "C:/bun_zipper.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
 NUM_TRIALS = 5
+VERBOSE_TRIAL_LOGS = False
 
-# 比較する手法を選択する。使用可能: "ElZein", "Hu", "Verma", "Proposed"
-# 例: COMPARED_METHODS = ["ElZein", "Proposed"]
-COMPARED_METHODS = ["ElZein", "Hu", "Verma", "Proposed"]
+# 使用可能: "ElZein_HARD", "ElZein_SOFT", "Hu", "Verma", "Proposed"
+# 例: COMPARED_METHODS = ["ElZein_HARD", "ElZein_SOFT", "Proposed"]
+COMPARED_METHODS = [
+    "ElZein_HARD",
+    "ElZein_SOFT",
+    "Hu",
+    "Verma",
+    "Proposed",
+]
 
 # visual_quality は攻撃を加えず、4種類の品質指標を NUM_TRIALS 回測る。
 EXPERIMENTS = [
@@ -31,7 +41,7 @@ EXPERIMENTS = [
     ("smoothing", [5, 10, 20, 30]),
     ("cropping", [0.9, 0.7, 0.5, 0.3]),
     ("downsampling", [0.5, 1.0, 1.5, 2.0]),
-    # ("visual_quality", [None]),
+    ("visual_quality", [None]),
 ]
 
 NOISE_MODE = "gaussian"
@@ -40,6 +50,10 @@ SMOOTHING_K = 6
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
+
+# El Zein HARD（論文の式(6)で指定された固定値）
+ELZEIN_HARD_A = 0.01
+ELZEIN_FCM_SEED = 42
 
 # 提案手法
 GRAPH_MODE = "knn"
@@ -115,10 +129,19 @@ def synchronize_if_needed(attacked, original):
     return DW2F.synchronize_point_cloud(attacked, original, verbose=False)
 
 
-def embed_elzein_from_selection(vertices, selected, bits, strength):
+def run_trial_call(function, *args, **kwargs):
+    """試行内の通常ログを抑えつつ、例外は呼び出し元へ伝える。"""
+    if VERBOSE_TRIAL_LOGS:
+        return function(*args, **kwargs)
+    with contextlib.redirect_stdout(io.StringIO()):
+        return function(*args, **kwargs)
+
+
+def embed_elzein_soft_from_selection(vertices, selected, bits, strength):
     if len(selected) < len(bits):
         raise ValueError(
-            f"El Zein capacity shortage: {len(selected)} carriers for {len(bits)} bits."
+            f"El Zein SOFT capacity shortage: "
+            f"{len(selected)} carriers for {len(bits)} bits."
         )
     marked = vertices.copy()
     for bit, group in zip(bits, np.array_split(selected, len(bits))):
@@ -250,7 +273,7 @@ def load_mesh():
 def prepare_methods(vertices, triangles, bits, target_mse):
     """各方式を一度埋め込み、方式名・頂点・抽出関数をまとめる。"""
     methods = {}
-    available = {"ElZein", "Hu", "Verma", "Proposed"}
+    available = {"ElZein_HARD", "ElZein_SOFT", "Hu", "Verma", "Proposed"}
     selected_methods = set(COMPARED_METHODS)
     unknown = selected_methods - available
     if unknown:
@@ -261,24 +284,49 @@ def prepare_methods(vertices, triangles, bits, target_mse):
     if not selected_methods:
         raise ValueError("COMPARED_METHODS must contain at least one method.")
 
-    if "ElZein" in selected_methods:
-        print("\n[ElZein] degree-6 face-normal FCM...")
-        elzein_selected = DW1ELZ.local_feature_clustering(
+    if "ElZein_HARD" in selected_methods:
+        print("\n[ElZein_HARD] strict Method II embedding...")
+        hard_marked, hard_key = DW1ELZHARD.embed_watermark_elzein_hard_mesh(
+            vertices,
+            triangles,
+            bits,
+            a=ELZEIN_HARD_A,
+            verbose=False,
+            seed=ELZEIN_FCM_SEED,
+        )
+        methods["ElZein_HARD"] = {
+            "vertices": hard_marked,
+            "extract": lambda attacked: (
+                DW1ELZHARD.extract_watermark_elzein_hard_mesh(
+                    attacked,
+                    vertices,
+                    triangles,
+                    key_info=hard_key,
+                    verbose=False,
+                )
+            ),
+        }
+
+    if "ElZein_SOFT" in selected_methods:
+        print("\n[ElZein_SOFT] redundant Portion 2 embedding...")
+        elzein_selected = DW1ELZSOFT.local_feature_clustering(
             vertices, triangles, verbose=False
         )
         marked = match_strength(
             vertices,
-            lambda a: embed_elzein_from_selection(
+            lambda a: embed_elzein_soft_from_selection(
                 vertices, elzein_selected, bits, a
             ),
             target_mse,
             1e-3,
-            "ElZein",
+            "ElZein_SOFT",
         )
-        methods["ElZein"] = {
+        methods["ElZein_SOFT"] = {
             "vertices": marked,
-            "extract": lambda attacked: DW1ELZ.extract_watermark_elzein_mesh(
-                attacked, vertices, triangles, len(bits), verbose=False
+            "extract": lambda attacked: (
+                DW1ELZSOFT.extract_watermark_elzein_mesh(
+                    attacked, vertices, triangles, len(bits), verbose=False
+                )
             ),
         }
 
@@ -359,8 +407,8 @@ def prepare_methods(vertices, triangles, bits, target_mse):
         _, psnr = embedding_quality(vertices, method["vertices"])
         method["psnr"] = psnr
         print(f"  {name:<20} PSNR={psnr:.2f} dB")
-        if name == "Verma":
-            print("    (fixed strength: TARGET_PSNR is ignored for Verma)")
+        if name in {"ElZein_HARD", "Verma"}:
+            print(f"    (fixed strength: TARGET_PSNR is ignored for {name})")
     return methods
 
 
@@ -372,11 +420,15 @@ def run_robustness_experiment(methods, bits, attack_type, parameters):
         for trial in range(NUM_TRIALS):
             seed = 42 + trial
             for name, method in methods.items():
-                attacked = apply_attack(
-                    method["vertices"], attack_type, parameter, seed
+                attacked = run_trial_call(
+                    apply_attack,
+                    method["vertices"],
+                    attack_type,
+                    parameter,
+                    seed,
                 )
                 try:
-                    extracted = method["extract"](attacked)
+                    extracted = run_trial_call(method["extract"], attacked)
                     sums[name] += bit_error_rate(bits, extracted)
                 except Exception as error:
                     print(f"    [{name}] extraction failed: {error}")
@@ -406,22 +458,27 @@ def run_visual_quality_experiment(methods, original):
 
 
 def result_method_label(name, methods):
-    """固定強度のVerma法だけ、結果ラベルに実測PSNRを付ける。"""
-    if name == "Verma":
-        return f"Verma ({methods[name]['psnr']:.2f} dB)"
+    """固定強度方式の結果ラベルに実測PSNRを付ける。"""
+    if name in {"ElZein_HARD", "Verma"}:
+        return f"{name} ({methods[name]['psnr']:.2f} dB)"
     return name
 
 
 def print_robustness_table(attack_type, parameters, results, methods):
     names = list(results)
-    labels = [result_method_label(name, methods) for name in names]
-    width = max(16, *(len(label) for label in labels))
+    method_labels = [result_method_label(name, methods) for name in names]
+    parameter_labels = [str(parameter) for parameter in parameters]
+    method_width = max(20, *(len(label) for label in method_labels))
+    value_width = max(12, *(len(label) for label in parameter_labels))
     print(f"\nRobustness: {attack_type}, BER, trials={NUM_TRIALS}")
-    print(" | ".join(f"{value:<{width}}" for value in ["Parameter", *labels]))
-    print("-" * ((width + 3) * (len(names) + 1)))
-    for index, parameter in enumerate(parameters):
-        values = [str(parameter), *(f"{results[name][index]:.4f}" for name in names)]
-        print(" | ".join(f"{value:<{width}}" for value in values))
+    header = [f"{'Method':<{method_width}}"]
+    header.extend(f"{label:>{value_width}}" for label in parameter_labels)
+    print(" | ".join(header))
+    print("-" * (method_width + (value_width + 3) * len(parameters)))
+    for name, method_label in zip(names, method_labels):
+        row = [f"{method_label:<{method_width}}"]
+        row.extend(f"{value:>{value_width}.4f}" for value in results[name])
+        print(" | ".join(row))
 
 
 def print_visual_quality_table(results, methods):

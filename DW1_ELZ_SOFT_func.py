@@ -1,11 +1,14 @@
-"""El Zein et al. の Method II を用いた FCM ベース3Dメッシュ透かし法。
+"""El Zein Method II の Portion 2 を二値・冗長化した従来 SOFT 実装。
 
-点群の k-NN は用いず、三角形メッシュの 1-ring と面法線からキャリア
-頂点を選択する。実験用の二値画像には式(6)を双極値化して適用する。
+moderate クラスタをビット数個のグループへ分割し、各グループへ同じ
+ビットを反復埋め込みして、抽出時に多数決する。頂点数が変わった場合は
+最近傍による点群同期も行う。これらは原論文に明記されていない拡張で、
+過去の実験結果を再現するために残す。
 """
 
 import numpy as np
 import skfuzzy as fuzz
+
 import DW2_func as DW2F
 
 
@@ -48,20 +51,13 @@ def _mesh_topology(vertices, triangles):
 
 
 def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
-    """論文 Sec. 3.1 に従い、中程度の局所形状を持つ次数6頂点を返す。
-
-    各候補の特徴量は、接続する6面の単位法線とそれらの平均法線との間の
-    6角度 ``(theta_1, ..., theta_6)`` である。FCM の3クラスタを角度の
-    平均値で low / moderate / high に並べ、moderate の頂点を選ぶ。
-    """
+    """論文 Sec. 3.1 に従い、中程度の局所形状を持つ次数6頂点を返す。"""
     vertices, triangles = _validate_mesh(vertices, triangles)
     neighbors, incident_faces, face_normals = _mesh_topology(vertices, triangles)
 
     candidate_indices = []
     features = []
     for vertex_index, faces in enumerate(incident_faces):
-        # 論文の degree 6 は 1-ring の隣接頂点数。通常の閉じた多様体では
-        # 接続面数も6となるため、特徴ベクトル長を保証するため両方を確認する。
         if len(neighbors[vertex_index]) != 6 or len(faces) != 6:
             continue
         normals = face_normals[faces]
@@ -72,7 +68,7 @@ def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
         average_normal /= average_length
         angles = np.arccos(np.clip(normals @ average_normal, -1.0, 1.0))
         candidate_indices.append(vertex_index)
-        features.append(np.sort(angles))  # 面の格納順に依存しない表現
+        features.append(np.sort(angles))
 
     if len(candidate_indices) < 3:
         raise ValueError(
@@ -107,12 +103,7 @@ def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
 def embed_watermark_elzein_mesh(
     vertices, triangles, watermark_bits, n_points, a, verbose=True
 ):
-    """従来の Method II 適応版を、実メッシュ上で実行する。
-
-    論文の式(6)は ``V*=V+a*w`` であり法線方向の変位ではない。本実験では
-    画像の2値ビットを扱うため、従来実装どおり 1/0 を +a/-a の双極値へ
-    対応させ、moderate クラスタをグループ分割して冗長に埋め込む。
-    """
+    """Portion 2を二値化し、頂点グループへ冗長に埋め込む。"""
     vertices, triangles = _validate_mesh(vertices, triangles)
     bits = np.asarray(watermark_bits, dtype=np.uint8).reshape(-1)
     if np.any((bits != 0) & (bits != 1)):
@@ -129,7 +120,6 @@ def embed_watermark_elzein_mesh(
     marked = vertices.copy()
     groups = np.array_split(selected, n_points)
     for bit, group in zip(bits, groups):
-        # np.ones(3) を加えることが論文の V(x,y,z)+a*w に対応する。
         displacement = a if bit else -a
         marked[group] += displacement
     return marked
@@ -138,30 +128,32 @@ def embed_watermark_elzein_mesh(
 def extract_watermark_elzein_mesh(
     marked_vertices, original_vertices, triangles, n_points, verbose=False
 ):
-    """Method II の非ブラインド部分を座標差の多数決で抽出する。"""
+    """座標差を各頂点で判定し、グループ内多数決で抽出する。"""
     original_vertices, triangles = _validate_mesh(original_vertices, triangles)
     marked_vertices = np.asarray(marked_vertices, dtype=float)
     if marked_vertices.shape != original_vertices.shape:
         marked_vertices = DW2F.synchronize_point_cloud(
             marked_vertices, original_vertices, verbose=verbose
         )
-    selected = local_feature_clustering(
-        original_vertices, triangles, verbose=verbose
-    )
+    selected = local_feature_clustering(original_vertices, triangles, verbose=verbose)
     if len(selected) < n_points:
         raise ValueError("Not enough moderate degree-6 vertices during extraction.")
     groups = np.array_split(selected, n_points)
     extracted = []
     for group in groups:
-        coordinate_sums = (marked_vertices[group] - original_vertices[group]).sum(axis=1)
-        extracted.append(int(np.count_nonzero(coordinate_sums > 0) > len(group) / 2))
+        coordinate_sums = (
+            marked_vertices[group] - original_vertices[group]
+        ).sum(axis=1)
+        extracted.append(
+            int(np.count_nonzero(coordinate_sums > 0) > len(group) / 2)
+        )
     return extracted
 
 
 def embed_watermark_elzein(
     vertices, triangles, watermark_bits, n_points, a, k=6, verbose=True
 ):
-    """旧関数名との互換ラッパー。kはdegree=6固定のため使用しない。"""
+    """旧関数名との互換ラッパー。"""
     if k != 6:
         raise ValueError("The paper defines feature vectors only for degree 6.")
     return embed_watermark_elzein_mesh(
@@ -178,3 +170,12 @@ def extract_watermark_elzein(
     return extract_watermark_elzein_mesh(
         marked_vertices, original_vertices, triangles, n_points, verbose
     )
+
+
+__all__ = [
+    "local_feature_clustering",
+    "embed_watermark_elzein_mesh",
+    "extract_watermark_elzein_mesh",
+    "embed_watermark_elzein",
+    "extract_watermark_elzein",
+]
