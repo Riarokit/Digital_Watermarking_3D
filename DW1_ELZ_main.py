@@ -19,15 +19,12 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"
-    input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon_vrip_res2.ply"
+    # input_file = "C:/bun_zipper.ply"
+    input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
-        raise ValueError(
-            "El Zein法には三角形メッシュ M={V,F} が必要です。"
-            "面を含むPLY/OFF/OBJを指定してください。"
-        )
+        raise ValueError("El Zein法には三角形メッシュ M={V,F} が必要です。面を含むPLY/OFF/OBJを指定してください。")
 
     # 2. 前処理
     raw_vertices = np.asarray(mesh_before.vertices)
@@ -73,7 +70,7 @@ if __name__ == "__main__":
     embed_time = time.time() - start_embed
 
     # OP. ノイズ攻撃
-    xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.5, mode="gaussian", seed=42)
+    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.5, mode="gaussian", seed=42)
 
     # OP. スムージング攻撃
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.2, iterations=30, k=6)

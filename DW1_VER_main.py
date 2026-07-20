@@ -17,7 +17,7 @@ if __name__ == "__main__":
     # 1. データ取得
     image_path = "watermark16.bmp"
     input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon_vrip_res2.ply"
+    # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:

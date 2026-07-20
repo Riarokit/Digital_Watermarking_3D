@@ -37,15 +37,15 @@ if __name__ == "__main__":
     # Bunny全周波用
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
-    beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
+    # beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
     # beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
-    # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon_vrip_res2.ply"
+    # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
-    # beta = 2.96e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon_vrip_res2.ply"
+    beta = 2.96e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
     # Dragon高周波用
-    # beta = 3.15e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon_vrip_res2.ply"
+    # beta = 3.15e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Armadillo全周波用
     # beta = 1.68e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
     # Armadillo低周波用

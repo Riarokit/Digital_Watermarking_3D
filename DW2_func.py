@@ -7,7 +7,7 @@ from sklearn.neighbors import NearestNeighbors
 from PIL import Image
 
 # 攻撃後点群の代表的な点間隔に対する、対応許容距離の倍率
-DEFAULT_SYNC_DISTANCE_FACTOR = 5.0
+DEFAULT_SYNC_DISTANCE_FACTOR = 8.0
 
 # =========================================================
 #  前処理関数群

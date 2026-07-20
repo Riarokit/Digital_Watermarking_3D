@@ -16,12 +16,17 @@ import DW2_func as DW2F
 
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
-INPUT_FILE = "C:/bun_zipper.ply"
-# INPUT_FILE = "C:/dragon_vrip_res2.ply"
+# INPUT_FILE = "C:/bun_zipper.ply"
+INPUT_FILE = "C:/dragon.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
-NUM_TRIALS = 5
+# KMeans・FCMの初期値を変えて作る埋め込みモデル数
+NUM_EMBEDDING_TRIALS = 3
+# ノイズ・ランダム/FPSダウンサンプリングの攻撃乱数試行数
+NUM_ATTACK_TRIALS = 3
+EMBEDDING_SEED_BASE = 42
+ATTACK_SEED_BASE = 42
 VERBOSE_TRIAL_LOGS = False
 SYNC_DISTANCE_FACTOR = DW2F.DEFAULT_SYNC_DISTANCE_FACTOR
 
@@ -34,24 +39,20 @@ COMPARED_METHODS = [
     "Proposed",
 ]
 
-# visual_quality は攻撃を加えず、4種類の決定論的な品質指標を1回測る。
 EXPERIMENTS = [
-    ("noise", [0.5, 0.8, 1.0, 1.2, 1.5]),
-    ("smoothing", [10, 20, 30, 40, 50]),
+    ("noise", [0.6, 0.8, 1.0, 1.2]),
+    ("smoothing", [10, 20, 30, 40]),
     ("cropping", [0.9, 0.7, 0.5, 0.3]),
     ("downsampling", [0.5, 1.0, 1.5, 2.0]),
     ("visual_quality", [None]),
 ]
 
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.3
+SMOOTHING_LAMBDA = 0.2
 SMOOTHING_K = 6
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
-
-# El ZeinのFCM乱数シード
-ELZEIN_FCM_SEED = 42
 
 # 提案手法
 GRAPH_MODE = "knn"
@@ -67,7 +68,7 @@ BANDS = [
 ]
 
 # Hu手法
-HU_INITIAL_FIDEP = 115.0
+HU_INITIAL_FIDEP = 53.0
 HU_T = 25
 HU_ARNOLD_ITERATIONS = 20
 
@@ -254,9 +255,17 @@ def load_mesh():
     return np.asarray(pcd.points).copy(), triangles
 
 
-def prepare_methods(vertices, triangles, bits, target_mse):
+def prepare_methods(
+    vertices,
+    triangles,
+    bits,
+    target_mse,
+    embedding_seed,
+    deterministic_cache,
+):
     """各方式を一度埋め込み、方式名・頂点・抽出関数をまとめる。"""
     methods = {}
+    newly_prepared = []
     available = {"ElZein", "Hu", "Verma", "Proposed"}
     selected_methods = set(COMPARED_METHODS)
     unknown = selected_methods - available
@@ -271,7 +280,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
     if "ElZein" in selected_methods:
         print("\n[ElZein] redundant Portion 2 embedding...")
         elzein_selected = DW1ELZ.local_feature_clustering(
-            vertices, triangles, seed=ELZEIN_FCM_SEED, verbose=False
+            vertices, triangles, seed=embedding_seed, verbose=False
         )
         _, elzein_strength = match_strength(
             vertices,
@@ -281,7 +290,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                 bits,
                 a=a,
                 verbose=False,
-                seed=ELZEIN_FCM_SEED,
+                seed=embedding_seed,
                 carrier_indices=elzein_selected,
             )[0],
             target_mse,
@@ -295,7 +304,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
             bits,
             a=elzein_strength,
             verbose=False,
-            seed=ELZEIN_FCM_SEED,
+            seed=embedding_seed,
             carrier_indices=elzein_selected,
         )
         methods["ElZein"] = {
@@ -311,33 +320,44 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                 )
             ),
         }
+        newly_prepared.append("ElZein")
 
     if "Hu" in selected_methods:
-        print("\n[Hu] surface EMD embedding...")
-        hu_marked, hu_key, _ = match_hu_fidep(
-            vertices, triangles, bits, target_mse
-        )
-        methods["Hu"] = {
-            "vertices": hu_marked,
-            "extract": lambda attacked: (
-                DW1HU.extract_watermark_hu_mesh(attacked, triangles, hu_key)
-            ),
-        }
+        if "Hu" in deterministic_cache:
+            methods["Hu"] = deterministic_cache["Hu"]
+        else:
+            print("\n[Hu] surface EMD embedding...")
+            hu_marked, hu_key, _ = match_hu_fidep(
+                vertices, triangles, bits, target_mse
+            )
+            methods["Hu"] = {
+                "vertices": hu_marked,
+                "extract": lambda attacked: (
+                    DW1HU.extract_watermark_hu_mesh(attacked, triangles, hu_key)
+                ),
+            }
+            deterministic_cache["Hu"] = methods["Hu"]
+            newly_prepared.append("Hu")
 
     if "Verma" in selected_methods:
-        print("\n[Verma] virtual histogram embedding...")
-        verma_marked, verma_key, _ = DW1VER.embed_watermark_verma_mesh(
-            vertices, triangles, bits
-        )
-        methods["Verma"] = {
-            "vertices": verma_marked,
-            "extract": lambda attacked: DW1VER.extract_watermark_verma_mesh(
-                vertices,
-                synchronize_if_needed(attacked, vertices),
-                triangles,
-                key_info=verma_key,
-            ),
-        }
+        if "Verma" in deterministic_cache:
+            methods["Verma"] = deterministic_cache["Verma"]
+        else:
+            print("\n[Verma] virtual histogram embedding...")
+            verma_marked, verma_key, _ = DW1VER.embed_watermark_verma_mesh(
+                vertices, triangles, bits
+            )
+            methods["Verma"] = {
+                "vertices": verma_marked,
+                "extract": lambda attacked: DW1VER.extract_watermark_verma_mesh(
+                    vertices,
+                    synchronize_if_needed(attacked, vertices),
+                    triangles,
+                    key_info=verma_key,
+                ),
+            }
+            deterministic_cache["Verma"] = methods["Verma"]
+            newly_prepared.append("Verma")
 
     if "Proposed" in selected_methods:
         for cluster_points in CLUSTER_POINTS_PROPOSED:
@@ -346,7 +366,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                 f"{cluster_points} points/cluster..."
             )
             labels = DW1X1.kmeans_cluster_points(
-                vertices, cluster_point=cluster_points, seed=42
+                vertices, cluster_point=cluster_points, seed=embedding_seed
             )
             min_size = min(
                 np.count_nonzero(labels == label) for label in np.unique(labels)
@@ -384,9 +404,11 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                         )
                     ),
                 }
+                newly_prepared.append(name)
 
-    print("\nEmbedding quality (before attacks):")
-    for name, method in methods.items():
+    print(f"\nEmbedding quality (seed={embedding_seed}, before attacks):")
+    for name in newly_prepared:
+        method = methods[name]
         _, psnr = embedding_quality(vertices, method["vertices"])
         method["psnr"] = psnr
         print(f"  {name:<20} PSNR={psnr:.2f} dB")
@@ -397,7 +419,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
                 f"{name}: embedding PSNR is {psnr:.4f} dB; "
                 f"expected {TARGET_PSNR:.4f} +/- 0.05 dB."
             )
-    return methods
+    return methods, newly_prepared
 
 
 def verify_no_attack_extraction(methods, bits):
@@ -414,67 +436,87 @@ def verify_no_attack_extraction(methods, bits):
             )
 
 
-def trial_count_for_attack(attack_type):
+def attack_trial_count(attack_type):
     """乱数を使う攻撃のみ複数回試行し、決定論的攻撃の重複実行を避ける。"""
+    if NUM_ATTACK_TRIALS < 1:
+        raise ValueError("NUM_ATTACK_TRIALS must be at least 1.")
     if attack_type == "noise":
-        return NUM_TRIALS
+        return NUM_ATTACK_TRIALS
     if attack_type == "downsampling" and DOWNSAMPLING_MODE in {"random", "fps"}:
-        return NUM_TRIALS
+        return NUM_ATTACK_TRIALS
     return 1
 
 
-def run_robustness_experiment(methods, bits, attack_type, parameters):
-    results = {name: [] for name in methods}
-    trial_count = trial_count_for_attack(attack_type)
+def run_robustness_experiment(method_variants, bits, attack_type, parameters):
+    results = {name: [] for name in method_variants}
+    trial_count = attack_trial_count(attack_type)
     for parameter in parameters:
-        print(f"  {attack_type}={parameter}: {trial_count} trial(s)")
-        sums = {name: 0.0 for name in methods}
-        for trial in range(trial_count):
-            seed = 42 + trial
-            for name, method in methods.items():
-                try:
-                    attacked = run_trial_call(
-                        apply_attack,
-                        method["vertices"],
-                        attack_type,
-                        parameter,
-                        seed,
-                    )
-                    extracted = run_trial_call(method["extract"], attacked)
-                    sums[name] += bit_error_rate(bits, extracted)
-                except Exception as error:
-                    raise RuntimeError(
-                        f"{name}: {attack_type}={parameter}, trial={trial + 1} "
-                        f"failed."
-                    ) from error
-        for name in methods:
-            results[name].append(sums[name] / trial_count)
+        print(f"  {attack_type}={parameter}: {trial_count} attack trial(s)")
+        for name, variants in method_variants.items():
+            ber_values = []
+            for variant_index, method in enumerate(variants):
+                for attack_trial in range(trial_count):
+                    seed = ATTACK_SEED_BASE + attack_trial
+                    try:
+                        attacked = run_trial_call(
+                            apply_attack,
+                            method["vertices"],
+                            attack_type,
+                            parameter,
+                            seed,
+                        )
+                        extracted = run_trial_call(method["extract"], attacked)
+                        ber_values.append(bit_error_rate(bits, extracted))
+                    except Exception as error:
+                        raise RuntimeError(
+                            f"{name}: {attack_type}={parameter}, "
+                            f"embedding trial={variant_index + 1}, "
+                            f"attack trial={attack_trial + 1} failed."
+                        ) from error
+            results[name].append(float(np.mean(ber_values)))
     return results
 
 
-def run_visual_quality_experiment(methods, original):
-    return {
-        name: visual_quality_scores(original, method["vertices"])
-        for name, method in methods.items()
-    }
+def run_visual_quality_experiment(method_variants, original):
+    results = {}
+    for name, variants in method_variants.items():
+        scores = [
+            visual_quality_scores(original, method["vertices"])
+            for method in variants
+        ]
+        results[name] = {
+            metric: float(np.mean([score[metric] for score in scores]))
+            for metric in scores[0]
+        }
+    return results
 
 
-def result_method_label(name, methods):
+def result_method_label(name, method_variants):
     """固定強度方式の結果ラベルに実測PSNRを付ける。"""
     if name == "Verma":
-        return f"{name} ({methods[name]['psnr']:.2f} dB)"
+        return f"{name} ({method_variants[name][0]['psnr']:.2f} dB)"
     return name
 
 
-def print_robustness_table(attack_type, parameters, results, methods):
+def print_robustness_table(
+    attack_type, parameters, results, method_variants
+):
     names = list(results)
-    method_labels = [result_method_label(name, methods) for name in names]
+    method_labels = [
+        result_method_label(name, method_variants) for name in names
+    ]
     parameter_labels = [str(parameter) for parameter in parameters]
     method_width = max(20, *(len(label) for label in method_labels))
     value_width = max(12, *(len(label) for label in parameter_labels))
     print(
         f"\nRobustness: {attack_type}, BER, "
-        f"trials={trial_count_for_attack(attack_type)}"
+        f"attack trials={attack_trial_count(attack_type)}"
+    )
+    print(
+        "Embedding variants: "
+        + ", ".join(
+            f"{name}={len(method_variants[name])}" for name in names
+        )
     )
     header = [f"{'Method':<{method_width}}"]
     header.extend(f"{label:>{value_width}}" for label in parameter_labels)
@@ -486,21 +528,52 @@ def print_robustness_table(attack_type, parameters, results, methods):
         print(" | ".join(row))
 
 
-def print_visual_quality_table(results, methods):
+def print_visual_quality_table(results, method_variants):
     metrics = ("PC-MSDM", "AngularSimilarity", "P2D", "PointSSIM")
-    print("\nVisual quality without attack, trials=1 (higher is better)")
+    print("\nVisual quality without attack (higher is better)")
     print(" | ".join(f"{value:<20}" for value in ("Method", *metrics)))
     print("-" * 115)
     for name, scores in results.items():
         values = [
-            result_method_label(name, methods),
+            result_method_label(name, method_variants),
             *(f"{scores[metric]:.4f}" for metric in metrics),
         ]
         print(" | ".join(f"{value:<20}" for value in values))
 
 
+def prepare_method_variants(vertices, triangles, bits, target_mse):
+    """乱数依存方式はseedごとに再埋め込みし、決定論的方式は再利用する。"""
+    if NUM_EMBEDDING_TRIALS < 1:
+        raise ValueError("NUM_EMBEDDING_TRIALS must be at least 1.")
+    deterministic_cache = {}
+    method_variants = {}
+    for trial in range(NUM_EMBEDDING_TRIALS):
+        embedding_seed = EMBEDDING_SEED_BASE + trial
+        print(
+            f"\n========== Embedding trial {trial + 1} / "
+            f"{NUM_EMBEDDING_TRIALS} (seed={embedding_seed}) =========="
+        )
+        np.random.seed(embedding_seed)
+        methods, newly_prepared = prepare_methods(
+            vertices,
+            triangles,
+            bits,
+            target_mse,
+            embedding_seed,
+            deterministic_cache,
+        )
+        new_methods = {name: methods[name] for name in newly_prepared}
+        verify_no_attack_extraction(new_methods, bits)
+        for name in newly_prepared:
+            method_variants.setdefault(name, []).append(methods[name])
+
+    if not method_variants:
+        raise RuntimeError("No method variants were prepared.")
+    return method_variants
+
+
 def main():
-    np.random.seed(42)
+    np.random.seed(EMBEDDING_SEED_BASE)
     vertices, triangles = load_mesh()
     if not os.path.isfile(IMAGE_PATH):
         raise FileNotFoundError(f"Watermark image not found: {IMAGE_PATH}")
@@ -511,19 +584,23 @@ def main():
         f"Mesh: {len(vertices)} vertices, {len(triangles)} faces; "
         f"watermark={len(bits)} bits; target PSNR={TARGET_PSNR} dB"
     )
-    methods = prepare_methods(vertices, triangles, bits, target_mse)
-    verify_no_attack_extraction(methods, bits)
+    method_variants = prepare_method_variants(
+        vertices, triangles, bits, target_mse
+    )
 
     for experiment_type, parameters in EXPERIMENTS:
         if experiment_type == "visual_quality":
             print_visual_quality_table(
-                run_visual_quality_experiment(methods, vertices), methods
+                run_visual_quality_experiment(method_variants, vertices),
+                method_variants,
             )
         else:
             results = run_robustness_experiment(
-                methods, bits, experiment_type, parameters
+                method_variants, bits, experiment_type, parameters
             )
-            print_robustness_table(experiment_type, parameters, results, methods)
+            print_robustness_table(
+                experiment_type, parameters, results, method_variants
+            )
 
 
 if __name__ == "__main__":

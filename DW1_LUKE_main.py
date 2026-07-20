@@ -40,10 +40,8 @@ if __name__ == "__main__":
     # 1. データ取得
     image_path = "watermark16.bmp"
     input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon_vrip_res2.ply"
+    # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
-    # input_file = "C:/longdress_vox12.ply"
-    # input_file = "C:/soldier_vox12.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
         raise ValueError("Luke法は三角形メッシュを必要とします。面を含むPLY/OBJ/STLファイルを指定してください。")
