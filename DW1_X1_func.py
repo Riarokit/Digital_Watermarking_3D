@@ -1,5 +1,6 @@
 import numpy as np
 import open3d as o3d
+from scipy.spatial import cKDTree
 from sklearn.cluster import KMeans
 import DW2_func as DW2F
 from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbors_graph
@@ -566,6 +567,128 @@ def embed_watermark_x1(
 
     return xyz_after
 
+def match_point_cloud_to_original(
+    xyz_att,
+    xyz_orig,
+    distance_threshold=None,
+    distance_factor=8.0,
+    verbose=True,
+):
+    """攻撃後点群を元頂点位置へ多対1対応させ、遠すぎる対応を棄却する。
+
+    複数の元頂点が同じ攻撃後点を参照できるため、ダウンサンプリング後も
+    元点群と同じ頂点数の信号として扱える。対応なし座標にはNaNを設定する。
+    """
+    xyz_att = np.asarray(xyz_att, dtype=np.float64)
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    if xyz_att.ndim != 2 or xyz_att.shape[1] != 3 or len(xyz_att) == 0:
+        raise ValueError("xyz_att must have shape (N, 3) and be non-empty.")
+    if xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
+        raise ValueError("xyz_orig must have shape (N, 3).")
+    if distance_factor <= 0:
+        raise ValueError("distance_factor must be positive.")
+
+    attacked_tree = cKDTree(xyz_att)
+    if distance_threshold is None:
+        if len(xyz_att) < 2:
+            raise ValueError(
+                "At least two attacked points are required to estimate spacing."
+            )
+        neighbor_distances, _ = attacked_tree.query(xyz_att, k=2)
+        spacing = neighbor_distances[:, 1]
+        spacing = spacing[np.isfinite(spacing) & (spacing > 1e-12)]
+        if len(spacing) == 0:
+            raise ValueError(
+                "Cannot estimate spacing from duplicate attacked points."
+            )
+        distance_threshold = float(distance_factor * np.median(spacing))
+    if distance_threshold < 0:
+        raise ValueError("distance_threshold must be non-negative.")
+
+    distances, indices = attacked_tree.query(xyz_orig, k=1)
+    valid = np.isfinite(distances) & (distances <= distance_threshold)
+    matched = xyz_att[indices].copy()
+    matched[~valid] = np.nan
+    if verbose:
+        print(
+            f"[Match] threshold={distance_threshold:.6e}, "
+            f"unmatched={np.count_nonzero(~valid)} / {len(xyz_orig)}"
+        )
+    return matched, valid, distances, float(distance_threshold)
+
+
+def is_vertex_order_consistent(
+    xyz_att,
+    xyz_orig,
+    k=6,
+    edge_factor=8.0,
+    max_bad_ratio=0.25,
+    max_samples=20000,
+    verbose=True,
+):
+    """元k-NN辺が攻撃後も同一インデックス間で局所的かを調べる。
+
+    頂点順序が維持されていれば、元点群で近傍だったインデックス対は
+    ノイズやスムージング後も概ね近い。一方、順序変更後は同じ番号の
+    頂点対が空間的に離れるため、攻撃後点間隔に対して長い辺が増える。
+    """
+    xyz_att = np.asarray(xyz_att, dtype=np.float64)
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    if xyz_att.ndim != 2 or xyz_att.shape[1] != 3:
+        raise ValueError("xyz_att must have shape (N, 3).")
+    if xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
+        raise ValueError("xyz_orig must have shape (N, 3).")
+    if xyz_att.shape != xyz_orig.shape:
+        return False
+    if len(xyz_orig) < 2:
+        return True
+    if k < 1 or edge_factor <= 0 or not 0 <= max_bad_ratio <= 1:
+        raise ValueError("Invalid vertex-order check parameters.")
+    if max_samples < 1:
+        raise ValueError("max_samples must be at least 1.")
+
+    sample_count = min(len(xyz_orig), int(max_samples))
+    sample_indices = np.linspace(
+        0, len(xyz_orig) - 1, sample_count, dtype=np.int64
+    )
+
+    attacked_tree = cKDTree(xyz_att)
+    attacked_nn, _ = attacked_tree.query(xyz_att[sample_indices], k=2)
+    spacing_values = attacked_nn[:, 1]
+    spacing_values = spacing_values[
+        np.isfinite(spacing_values) & (spacing_values > 1e-12)
+    ]
+    if len(spacing_values) == 0:
+        raise ValueError("Cannot estimate attacked point spacing.")
+    attacked_spacing = float(np.median(spacing_values))
+
+    neighbor_count = min(int(k) + 1, len(xyz_orig))
+    original_tree = cKDTree(xyz_orig)
+    _, neighbor_indices = original_tree.query(
+        xyz_orig[sample_indices], k=neighbor_count
+    )
+    neighbor_indices = np.asarray(neighbor_indices)[:, 1:]
+    centers = np.repeat(sample_indices, neighbor_count - 1)
+    neighbors = neighbor_indices.reshape(-1)
+    attacked_edge_lengths = np.linalg.norm(
+        xyz_att[centers] - xyz_att[neighbors], axis=1
+    )
+    normalized_lengths = attacked_edge_lengths / attacked_spacing
+    normalized_lengths = normalized_lengths[np.isfinite(normalized_lengths)]
+    if len(normalized_lengths) == 0:
+        raise ValueError("Cannot evaluate vertex-order consistency.")
+
+    median_ratio = float(np.median(normalized_lengths))
+    bad_ratio = float(np.mean(normalized_lengths > edge_factor))
+    consistent = median_ratio <= edge_factor and bad_ratio <= max_bad_ratio
+    if verbose:
+        mode = "index" if consistent else "coordinate"
+        print(
+            f"[Order] median_edge/spacing={median_ratio:.3f}, "
+            f"bad_edges={bad_ratio:.2%}, correspondence={mode}"
+        )
+    return consistent
+
 def extract_watermark_x1(
     xyz_emb: np.ndarray,
     xyz_orig: np.ndarray,
@@ -577,7 +700,11 @@ def extract_watermark_x1(
     min_spectre: float = 0.0,
     max_spectre: float = 1.0,
     skip_threshold_mode: str = "half",  # "half" or "none"
-    synchronization_factor: float = DW2F.DEFAULT_SYNC_DISTANCE_FACTOR,
+    match_distance_factor: float = 8.0,
+    order_check_k: int = 6,
+    order_check_edge_factor: float = 8.0,
+    order_check_max_bad_ratio: float = 0.25,
+    order_check_max_samples: int = 20000,
 ):
     """
     埋め込み前点群 xyz_orig から疑似平面を再構築し、
@@ -586,15 +713,38 @@ def extract_watermark_x1(
     重要:
     - 疑似平面推定は xyz_orig（埋め込み前）で行う（xyz_embで推定すると透かし変位が平面推定に混入する）。
     - グラフも xyz_orig（クラスタ内座標）で構築する（埋め込み前と一致させる）。
+    - 同数点群では元k-NN辺の局所性から順序保持を判定し、保持時は
+      インデックス対応を使う。点数変更または順序不整合時だけ多対1の
+      座標対応へ切り替える。
     """
     xyz_emb = np.asarray(xyz_emb, dtype=float)
     xyz_orig = np.asarray(xyz_orig, dtype=float)
-    xyz_emb, valid_vertices, _, _ = DW2F.match_point_cloud_to_original(
-        xyz_emb,
-        xyz_orig,
-        distance_factor=synchronization_factor,
-        verbose=True,
-    )
+    if (
+        xyz_emb.shape == xyz_orig.shape
+        and is_vertex_order_consistent(
+            xyz_emb,
+            xyz_orig,
+            k=order_check_k,
+            edge_factor=order_check_edge_factor,
+            max_bad_ratio=order_check_max_bad_ratio,
+            max_samples=order_check_max_samples,
+            verbose=True,
+        )
+    ):
+        valid_vertices = np.ones(len(xyz_orig), dtype=bool)
+        xyz_emb = xyz_emb.copy()
+    else:
+        if len(xyz_emb) != len(xyz_orig):
+            print(
+                f"[Order] vertex count changed: {len(xyz_orig)} -> "
+                f"{len(xyz_emb)}; correspondence=coordinate"
+            )
+        xyz_emb, valid_vertices, _, _ = match_point_cloud_to_original(
+            xyz_emb,
+            xyz_orig,
+            distance_factor=match_distance_factor,
+            verbose=True,
+        )
     if embed_bits_length <= 0:
         return []
 

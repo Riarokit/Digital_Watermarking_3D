@@ -6,9 +6,6 @@ from scipy.spatial import cKDTree
 from sklearn.neighbors import NearestNeighbors
 from PIL import Image
 
-# 攻撃後点群の代表的な点間隔に対する、対応許容距離の倍率
-DEFAULT_SYNC_DISTANCE_FACTOR = 8.0
-
 # =========================================================
 #  前処理関数群
 # =========================================================
@@ -168,82 +165,6 @@ def find_unreferenced_vertex_indices(vertices, triangles):
     mask[used] = False
     return np.flatnonzero(mask)
 
-
-def match_point_cloud_to_original(
-    xyz_att,
-    xyz_orig,
-    distance_threshold=None,
-    distance_factor=DEFAULT_SYNC_DISTANCE_FACTOR,
-    verbose=True,
-):
-    """攻撃後点群を元頂点位置へ多対1対応させ、遠すぎる対応を棄却する。
-
-    各元頂点から最も近い攻撃後点を探索するため、複数の元頂点が同じ
-    攻撃後点を参照してよい。この多対1対応により、ボクセルダウン
-    サンプリング後の代表点を元点群と同じ頂点数の信号として扱える。
-
-    ``distance_threshold`` が未指定の場合は、攻撃後点群の最近傍点間
-    距離の中央値に ``distance_factor`` を掛けて閾値を決める。最近傍
-    点までの距離が閾値を超えた元頂点は対応なしとし、元座標による
-    補完は行わない。
-
-    戻り値は、元頂点順に並べた対応後座標、有効対応マスク、対応距離、
-    実際に使用した距離閾値である。対応なし座標には NaN を設定する。
-    """
-    xyz_att = np.asarray(xyz_att, dtype=np.float64)
-    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
-    if xyz_att.ndim != 2 or xyz_att.shape[1] != 3 or len(xyz_att) == 0:
-        raise ValueError("xyz_att must have shape (N, 3) and be non-empty.")
-    if xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
-        raise ValueError("xyz_orig must have shape (N, 3).")
-    if distance_factor <= 0:
-        raise ValueError("distance_factor must be positive.")
-
-    attacked_tree = cKDTree(xyz_att)
-    if distance_threshold is None:
-        if len(xyz_att) < 2:
-            raise ValueError(
-                "At least two attacked points are required to estimate spacing."
-            )
-        neighbor_distances, _ = attacked_tree.query(xyz_att, k=2)
-        spacing = neighbor_distances[:, 1]
-        spacing = spacing[np.isfinite(spacing) & (spacing > 1e-12)]
-        if len(spacing) == 0:
-            raise ValueError(
-                "Cannot estimate spacing from duplicate attacked points."
-            )
-        distance_threshold = float(distance_factor * np.median(spacing))
-    if distance_threshold < 0:
-        raise ValueError("distance_threshold must be non-negative.")
-
-    distances, indices = attacked_tree.query(xyz_orig, k=1)
-    valid = np.isfinite(distances) & (distances <= distance_threshold)
-    matched = xyz_att[indices].copy()
-    matched[~valid] = np.nan
-    if verbose:
-        print(
-            f"[Match] threshold={distance_threshold:.6e}, "
-            f"unmatched={np.count_nonzero(~valid)} / {len(xyz_orig)}"
-        )
-    return matched, valid, distances, float(distance_threshold)
-
-
-def synchronize_point_cloud(xyz_att, xyz_orig, distance_threshold=None, verbose=True):
-    """攻撃後点群を原頂点へ最近傍対応させ、欠損位置を原座標で補う。"""
-    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
-    if distance_threshold is None:
-        distance_threshold = np.linalg.norm(np.ptp(xyz_orig, axis=0)) * 0.01
-    synchronized, valid, _, _ = match_point_cloud_to_original(
-        xyz_att,
-        xyz_orig,
-        distance_threshold=distance_threshold,
-        verbose=False,
-    )
-    missing = ~valid
-    synchronized[missing] = xyz_orig[missing]
-    if verbose:
-        print(f"[Sync] compensated missing vertices: {np.count_nonzero(missing)} / {len(xyz_orig)}")
-    return synchronized
 
 def visualize_mesh_with_highlighted_vertices(
     mesh,

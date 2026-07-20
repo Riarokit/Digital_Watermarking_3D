@@ -31,19 +31,25 @@ if __name__ == "__main__":
     graph_mode = 'knn'
     k = 6
     radius = 0.03
+    # 同数点群で頂点順序が維持されているかを判定する設定
+    order_check_k = 6                 # 元点群で調べる近傍数
+    order_check_edge_factor = 8.0     # 攻撃後点間隔に対する長辺判定倍率
+    order_check_max_bad_ratio = 0.25  # 長辺を許容する最大割合
+    order_check_max_samples = 20000   # 判定に使う最大頂点数
+    match_distance_factor = 8.0       # 座標対応を許容する点間隔倍率
     # 平面曲面アプローチ
     flatness_weighting = 0
 
     # Bunny全周波用
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
-    # beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
+    beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
     # beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
     # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
-    beta = 2.96e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
+    # beta = 2.96e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
     # Dragon高周波用
     # beta = 3.15e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Armadillo全周波用
@@ -93,7 +99,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.5, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=40, k=6)
+    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=40, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
@@ -106,7 +112,12 @@ if __name__ == "__main__":
     extracted_bits = DW1X1.extract_watermark_x1(
         xyz_after, xyz, labels, watermark_bits_length,
         graph_mode=graph_mode, k=k, radius=radius,
-        min_spectre=min_spectre, max_spectre=max_spectre
+        min_spectre=min_spectre, max_spectre=max_spectre,
+        order_check_k=order_check_k,
+        order_check_edge_factor=order_check_edge_factor,
+        order_check_max_bad_ratio=order_check_max_bad_ratio,
+        order_check_max_samples=order_check_max_samples,
+        match_distance_factor=match_distance_factor,
     )
     extract_time = time.time() - start
 
@@ -118,7 +129,7 @@ if __name__ == "__main__":
     print(pcd_after)
     if len(xyz_after) == len(xyz):
         DW2F.evaluate_psnr(pcd_before, pcd_after)
-        DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
+        # DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
         DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
         DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)

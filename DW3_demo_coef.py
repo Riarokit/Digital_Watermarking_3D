@@ -31,10 +31,6 @@ def check_spectrum(only_distribution=True):
         xyz_noise = xyz_orig + noise
         xyz_smooth = DW1F.smoothing_attack(xyz_orig, lambda_val=0.05, iterations=100, k=6)
 
-        # 抽出時の同期（インデックス対応付け）エラーを再現する
-        xyz_noise = DW1F.synchronize_point_cloud(xyz_noise, xyz_orig, verbose=False)
-        xyz_smooth = DW1F.synchronize_point_cloud(xyz_smooth, xyz_orig, verbose=False)
-
     # 周波数ごとのエネルギー蓄積用
     # 周波数を 0.0~1.0 に正規化し、例えば 50 ビンで平均をとる
     num_bins = 50

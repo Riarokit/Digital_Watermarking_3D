@@ -9,7 +9,6 @@ imperceptibility based on EMD on surfaces", The Visual Computer, 2023.
 """
 
 from dataclasses import dataclass
-from itertools import permutations, product
 
 import numpy as np
 import open3d as o3d
@@ -23,15 +22,13 @@ import warnings
 class HuWatermarkKey:
     """Algorithm 2 で必要な補助情報。
 
-    ``embedding_positions`` は生の頂点番号ではなく埋込時の座標も保存する。
-    これにより頂点並べ替え後も最近傍対応を取り直せる。
+    ``embedding_positions`` は論文で保存される埋め込み極値位置に対応する。
+    抽出時はこの極値位置だけを用いて対応頂点を特定する。
     """
 
     embedding_indices: np.ndarray
     embedding_positions: np.ndarray
-    embedding_signatures: np.ndarray
-    matching_threshold_raw: float
-    matching_threshold_canonical: float
+    matching_threshold: float
     bit_indices: np.ndarray
     repetitions: np.ndarray
     watermark_size: int
@@ -329,20 +326,8 @@ def _make_embedding_schedule(max_idx, min_idx, signal, repetitions):
             np.asarray(reps, dtype=np.int64))
 
 
-def _canonical_coordinates(points):
-    """平行移動・一様拡大・回転を除いた PCA 座標を返す。"""
-    centered = points - np.mean(points, axis=0)
-    scale = np.linalg.norm(centered, axis=1).max()
-    if scale <= 1e-15:
-        raise ValueError("対応付け用の座標正規化に失敗しました。")
-    centered /= scale
-    _, vectors = np.linalg.eigh(centered.T @ centered)
-    basis = vectors[:, ::-1]
-    return centered @ basis
-
-
 def _nearest_neighbor_scale(points):
-    """Return a robust spacing estimate used to reject missing carriers."""
+    """欠損した極値キャリアを除外するための代表点間隔を返す。"""
     points = np.asarray(points, dtype=float)
     if len(points) < 2:
         return 0.0
@@ -390,19 +375,12 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
 
     scale = np.divide(rho_new, rho, out=np.zeros_like(rho_new), where=rho > 1e-15)
     watermarked = centered * scale[:, None] + np.mean(vertices, axis=0)
-    canonical_watermarked = _canonical_coordinates(watermarked)
     raw_extent = np.linalg.norm(np.ptp(watermarked, axis=0))
-    canonical_extent = np.linalg.norm(np.ptp(canonical_watermarked, axis=0))
     key = HuWatermarkKey(
         embedding_indices=embedding_indices,
         embedding_positions=watermarked[embedding_indices].copy(),
-        embedding_signatures=canonical_watermarked[embedding_indices].copy(),
-        matching_threshold_raw=max(
+        matching_threshold=max(
             0.75 * _nearest_neighbor_scale(watermarked), raw_extent * 1e-5
-        ),
-        matching_threshold_canonical=max(
-            0.75 * _nearest_neighbor_scale(canonical_watermarked),
-            canonical_extent * 1e-5,
         ),
         bit_indices=bit_indices,
         repetitions=reps,
@@ -416,7 +394,7 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
 
 
 def _greedy_unique_match(reference, candidate, distance_threshold, neighbors=16):
-    """Match carriers one-to-one and leave distant carriers unmatched."""
+    """保存極値と攻撃後頂点を1対1対応し、遠い極値は欠損扱いにする。"""
     reference = np.asarray(reference, dtype=float)
     candidate = np.asarray(candidate, dtype=float)
     matched = np.full(len(reference), -1, dtype=np.int64)
@@ -451,42 +429,14 @@ def _greedy_unique_match(reference, candidate, distance_threshold, neighbors=16)
 
 
 def _match_embedding_positions(vertices, key):
-    """保存座標を使い、頂点順序変更後の対応頂点を取得する。"""
-    # Cropping/downsampling normally preserves the original coordinate frame.
-    # Try raw saved extreme positions before PCA-based registration.
-    best_indices, best_distances = _greedy_unique_match(
+    """論文で保存する埋め込み極値位置から対応頂点を取得する。"""
+    indices, _ = _greedy_unique_match(
         key.embedding_positions,
         vertices,
-        key.matching_threshold_raw,
+        key.matching_threshold,
     )
-    best_valid = best_indices >= 0
-    best_count = int(np.count_nonzero(best_valid))
-    best_error = (
-        float(np.median(best_distances[best_valid])) if best_count else np.inf
-    )
-
-    # 頂点並べ替えには座標ベースで対応付ける。さらに PCA 座標の符号・軸置換を
-    # 全探索して、平行移動・回転・一様スケールの similarity transform に対応する。
-    target_signature = _canonical_coordinates(vertices)
-    reference = key.embedding_signatures
-    for permutation in permutations(range(3)):
-        permuted = target_signature[:, permutation]
-        for signs in product((-1.0, 1.0), repeat=3):
-            candidate = permuted * np.asarray(signs)
-            indices, distances = _greedy_unique_match(
-                reference,
-                candidate,
-                key.matching_threshold_canonical,
-            )
-            valid = indices >= 0
-            count = int(np.count_nonzero(valid))
-            error = float(np.median(distances[valid])) if count else np.inf
-            if count > best_count or (count == best_count and error < best_error):
-                best_indices = indices
-                best_valid = valid
-                best_count = count
-                best_error = error
-    return np.asarray(best_indices, dtype=np.int64), np.asarray(best_valid, dtype=bool)
+    valid = indices >= 0
+    return np.asarray(indices, dtype=np.int64), np.asarray(valid, dtype=bool)
 
 
 def extract_watermark_hu_mesh(vertices, triangles, key_info):

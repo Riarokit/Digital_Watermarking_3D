@@ -10,9 +10,6 @@ from dataclasses import dataclass
 import numpy as np
 import skfuzzy as fuzz
 
-import DW2_func as DW2F
-
-
 @dataclass(frozen=True)
 class ElZeinWatermarkKey:
     """埋め込み時のキャリア位置と抽出設定。"""
@@ -142,24 +139,6 @@ def _saved_carriers(key_info):
     return carriers
 
 
-def _synchronize_if_needed(
-    marked_vertices,
-    original_vertices,
-    verbose,
-    synchronization_factor,
-):
-    marked_vertices = np.asarray(marked_vertices, dtype=float)
-    if marked_vertices.ndim != 2 or marked_vertices.shape[1] != 3:
-        raise ValueError("marked_vertices must have shape (N, 3).")
-    synchronized, valid, _, _ = DW2F.match_point_cloud_to_original(
-        marked_vertices,
-        original_vertices,
-        distance_factor=synchronization_factor,
-        verbose=verbose,
-    )
-    return synchronized, valid
-
-
 def embed_watermark_elzein_mesh(
     vertices,
     triangles,
@@ -209,24 +188,31 @@ def extract_watermark_elzein_mesh(
     triangles,
     key_info,
     verbose=False,
-    synchronization_factor=DW2F.DEFAULT_SYNC_DISTANCE_FACTOR,
 ):
-    """保存キャリアの座標差をグループ内多数決して抽出する。"""
+    """同一頂点インデックスの座標差をグループ内多数決して抽出する。
+
+    El Zein Method II の Portion 2 は透かし入りモデルと原モデルの
+    対応頂点差を前提とする。汎用座標同期は行わず、頂点数が変化した
+    場合は全ビットを抽出不能として返す。
+    """
     original_vertices, triangles = _validate_mesh(original_vertices, triangles)
-    marked_vertices, valid_vertices = _synchronize_if_needed(
-        marked_vertices,
-        original_vertices,
-        verbose=verbose,
-        synchronization_factor=synchronization_factor,
-    )
+    marked_vertices = np.asarray(marked_vertices, dtype=float)
+    if marked_vertices.ndim != 2 or marked_vertices.shape[1] != 3:
+        raise ValueError("marked_vertices must have shape (N, 3).")
+    if not np.isfinite(marked_vertices).all():
+        raise ValueError("marked_vertices contains NaN or infinity.")
     carriers = _saved_carriers(key_info)
+    if len(marked_vertices) != len(original_vertices):
+        if verbose:
+            print(
+                f"[ElZein] vertex count changed: {len(original_vertices)} -> "
+                f"{len(marked_vertices)}; all bits are undecodable."
+            )
+        return [-1] * key_info.watermark_length
+
     groups = np.array_split(carriers, key_info.watermark_length)
     extracted = []
     for group in groups:
-        group = group[valid_vertices[group]]
-        if len(group) == 0:
-            extracted.append(-1)
-            continue
         coordinate_sums = (
             marked_vertices[group] - original_vertices[group]
         ).sum(axis=1)

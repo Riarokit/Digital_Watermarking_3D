@@ -28,7 +28,6 @@ NUM_ATTACK_TRIALS = 3
 EMBEDDING_SEED_BASE = 42
 ATTACK_SEED_BASE = 42
 VERBOSE_TRIAL_LOGS = False
-SYNC_DISTANCE_FACTOR = DW2F.DEFAULT_SYNC_DISTANCE_FACTOR
 
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
@@ -58,6 +57,11 @@ DOWNSAMPLING_MODE = "voxel"
 GRAPH_MODE = "knn"
 KNN_K = 6
 GRAPH_RADIUS = 0.03
+ORDER_CHECK_K = 6                 # 元点群で調べる近傍数
+ORDER_CHECK_EDGE_FACTOR = 8.0     # 攻撃後点間隔に対する長辺判定倍率
+ORDER_CHECK_MAX_BAD_RATIO = 0.25  # 長辺を許容する最大割合
+ORDER_CHECK_MAX_SAMPLES = 20000   # 判定に使う最大頂点数
+MATCH_DISTANCE_FACTOR = 8.0       # 座標対応を許容する点間隔倍率
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
@@ -120,12 +124,6 @@ def apply_attack(vertices, attack_type, parameter, seed):
     if attack_type == "visual_quality":
         return np.asarray(vertices).copy()
     raise ValueError(f"Unknown experiment type: {attack_type}")
-
-
-def synchronize_if_needed(attacked, original):
-    if np.asarray(attacked).shape == np.asarray(original).shape:
-        return np.asarray(attacked)
-    return DW2F.synchronize_point_cloud(attacked, original, verbose=False)
 
 
 def run_trial_call(function, *args, **kwargs):
@@ -316,7 +314,6 @@ def prepare_methods(
                     triangles,
                     key_info=elzein_key,
                     verbose=False,
-                    synchronization_factor=SYNC_DISTANCE_FACTOR,
                 )
             ),
         }
@@ -351,7 +348,7 @@ def prepare_methods(
                 "vertices": verma_marked,
                 "extract": lambda attacked: DW1VER.extract_watermark_verma_mesh(
                     vertices,
-                    synchronize_if_needed(attacked, vertices),
+                    attacked,
                     triangles,
                     key_info=verma_key,
                 ),
@@ -400,7 +397,11 @@ def prepare_methods(
                             radius=GRAPH_RADIUS,
                             min_spectre=lo,
                             max_spectre=hi,
-                            synchronization_factor=SYNC_DISTANCE_FACTOR,
+                            match_distance_factor=MATCH_DISTANCE_FACTOR,
+                            order_check_k=ORDER_CHECK_K,
+                            order_check_edge_factor=ORDER_CHECK_EDGE_FACTOR,
+                            order_check_max_bad_ratio=ORDER_CHECK_MAX_BAD_RATIO,
+                            order_check_max_samples=ORDER_CHECK_MAX_SAMPLES,
                         )
                     ),
                 }
