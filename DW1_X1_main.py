@@ -128,7 +128,7 @@ if __name__ == "__main__":
         pcd_after.colors = o3d.utility.Vector3dVector(colors)
     print(pcd_after)
     if len(xyz_after) == len(xyz):
-        DW2F.evaluate_psnr(pcd_before, pcd_after)
+        DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
         # DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
         DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
         DW2F.evaluate_p2d(pcd_before, pcd_after)

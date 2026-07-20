@@ -40,17 +40,15 @@ if __name__ == "__main__":
     isolated_indices = DW2F.find_unreferenced_vertex_indices(raw_vertices, raw_triangles)
     if show_input_mesh:
         DW2F.visualize_mesh_with_highlighted_vertices(mesh_before, highlighted_indices=isolated_indices)
+    xyz, triangles, _ = DW2F.remove_unreferenced_vertices(
+        raw_vertices, raw_triangles
+    )
     pcd_before = o3d.geometry.PointCloud()
-    pcd_before.points = mesh_before.vertices
+    pcd_before.points = o3d.utility.Vector3dVector(xyz)
     pcd_before = DW2F.normalize_point_cloud(pcd_before)
     pcd_before = DW2F.add_colors(pcd_before, color="grad")
     xyz = np.asarray(pcd_before.points).copy()
-    triangles = np.asarray(mesh_before.triangles).copy()
     colors = np.asarray(pcd_before.colors).copy()
-    xyz, triangles, retained_indices = DW2F.remove_unreferenced_vertices(xyz, triangles)
-    colors = colors[retained_indices]
-    pcd_before.points = o3d.utility.Vector3dVector(xyz)
-    pcd_before.colors = o3d.utility.Vector3dVector(colors)
     print(f"[Hu] 面に未参照の孤立頂点を {len(isolated_indices)} 個除去しました。")
 
     # 3. 埋め込みビット生成
