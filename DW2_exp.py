@@ -23,7 +23,7 @@ IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
 NUM_TRIALS = 5
 VERBOSE_TRIAL_LOGS = False
-SYNC_DISTANCE_FACTOR = 5.0
+SYNC_DISTANCE_FACTOR = DW2F.DEFAULT_SYNC_DISTANCE_FACTOR
 
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
@@ -34,13 +34,13 @@ COMPARED_METHODS = [
     "Proposed",
 ]
 
-# visual_quality は攻撃を加えず、4種類の品質指標を NUM_TRIALS 回測る。
+# visual_quality は攻撃を加えず、4種類の決定論的な品質指標を1回測る。
 EXPERIMENTS = [
-    # ("noise", [0.5, 0.8, 1.0, 1.2, 1.5]),
+    ("noise", [0.5, 0.8, 1.0, 1.2, 1.5]),
     ("smoothing", [10, 20, 30, 40, 50]),
-    # ("cropping", [0.9, 0.7, 0.5, 0.4, 0.3]),
-    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
-    # ("visual_quality", [None]),
+    ("cropping", [0.9, 0.7, 0.5, 0.3]),
+    ("downsampling", [0.5, 1.0, 1.5, 2.0]),
+    ("visual_quality", [None]),
 ]
 
 NOISE_MODE = "gaussian"
@@ -61,13 +61,13 @@ FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
 BANDS = [
-    # ("Full", 0.0, 1.0, 1.6e-3),
+    ("Full", 0.0, 1.0, 1.6e-3),
     ("Low", 0.0, 0.2, 3.6e-3),
-    # ("High", 0.8, 1.0, 3.6e-3),
+    ("High", 0.8, 1.0, 3.6e-3),
 ]
 
 # Hu手法
-HU_FIDEP = 115.0
+HU_INITIAL_FIDEP = 115.0
 HU_T = 25
 HU_ARNOLD_ITERATIONS = 20
 
@@ -143,35 +143,26 @@ def match_strength(
     label,
     return_strength=False,
 ):
-    """埋め込み強度を二分探索し、目標MSEに最も近い結果を返す。"""
-    high = initial_strength
-    best_vertices = embed_function(high)
-    best_mse, best_psnr = embedding_quality(original, best_vertices)
-    for _ in range(20):
-        if best_mse >= target_mse:
-            break
-        high *= 2.0
-        best_vertices = embed_function(high)
-        best_mse, best_psnr = embedding_quality(original, best_vertices)
-    else:
-        raise RuntimeError(f"{label}: failed to bracket the target MSE.")
+    """変位と強度の比例関係から、目標MSEに対応する強度を求める。"""
+    candidate = embed_function(initial_strength)
+    mse, _ = embedding_quality(original, candidate)
+    if mse <= 0.0 or not np.isfinite(mse):
+        raise RuntimeError(f"{label}: initial embedding produced invalid MSE={mse}.")
 
-    low = 0.0
-    for _ in range(40):
-        strength = (low + high) / 2.0
+    strength = initial_strength * np.sqrt(target_mse / mse)
+    candidate = embed_function(strength)
+    mse, psnr = embedding_quality(original, candidate)
+
+    # 固有分解や再構成の数値誤差が見える場合だけ一度補正する。
+    if mse > 0.0 and abs(mse - target_mse) / target_mse >= 3e-4:
+        strength *= np.sqrt(target_mse / mse)
         candidate = embed_function(strength)
         mse, psnr = embedding_quality(original, candidate)
-        best_vertices, best_mse, best_psnr = candidate, mse, psnr
-        if mse < target_mse:
-            low = strength
-        else:
-            high = strength
-        if abs(mse - target_mse) / target_mse < 3e-4:
-            break
-    print(f"[{label}] strength={strength:.6e}, PSNR={best_psnr:.2f} dB")
+
+    print(f"[{label}] strength={strength:.6e}, PSNR={psnr:.2f} dB")
     if return_strength:
-        return best_vertices, strength
-    return best_vertices
+        return candidate, strength
+    return candidate
 
 
 def match_hu_fidep(vertices, triangles, bits, target_mse):
@@ -188,14 +179,14 @@ def match_hu_fidep(vertices, triangles, bits, target_mse):
             arnold_iterations=HU_ARNOLD_ITERATIONS,
         )
 
-    marked, key, alpha = embed(HU_FIDEP)
+    marked, key, alpha = embed(HU_INITIAL_FIDEP)
     mse, _ = embedding_quality(vertices, marked)
     if mse <= 0.0:
         raise RuntimeError("Hu: initial embedding produced zero MSE.")
 
     # alpha is proportional to 10**(-FideP/20), while MSE is proportional
     # to alpha**2. Therefore the target FideP can be calculated directly.
-    fidep = HU_FIDEP - 10.0 * np.log10(target_mse / mse)
+    fidep = HU_INITIAL_FIDEP - 10.0 * np.log10(target_mse / mse)
     marked, key, alpha = embed(fidep)
     mse, psnr = embedding_quality(vertices, marked)
 
@@ -244,17 +235,15 @@ def visual_quality_scores(original, marked):
 
 def bit_error_rate(reference_bits, extracted_bits):
     _, ber = DW2F.evaluate_robustness(
-        reference_bits, np.asarray(extracted_bits).reshape(-1).tolist(), verbose=False
+        reference_bits, extracted_bits, verbose=False
     )
     return ber
 
 
 def load_mesh():
-    if os.path.exists(INPUT_FILE):
-        mesh = o3d.io.read_triangle_mesh(INPUT_FILE)
-    else:
-        print(f"{INPUT_FILE} がないため、三角形球メッシュで代替します。")
-        mesh = o3d.geometry.TriangleMesh.create_sphere(radius=1.0, resolution=70)
+    if not os.path.isfile(INPUT_FILE):
+        raise FileNotFoundError(f"Input mesh not found: {INPUT_FILE}")
+    mesh = o3d.io.read_triangle_mesh(INPUT_FILE)
     if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
         raise ValueError("The comparison requires a triangle mesh (PLY/OFF/OBJ).")
 
@@ -282,7 +271,7 @@ def prepare_methods(vertices, triangles, bits, target_mse):
     if "ElZein" in selected_methods:
         print("\n[ElZein] redundant Portion 2 embedding...")
         elzein_selected = DW1ELZ.local_feature_clustering(
-            vertices, triangles, verbose=False
+            vertices, triangles, seed=ELZEIN_FCM_SEED, verbose=False
         )
         _, elzein_strength = match_strength(
             vertices,
@@ -403,15 +392,44 @@ def prepare_methods(vertices, triangles, bits, target_mse):
         print(f"  {name:<20} PSNR={psnr:.2f} dB")
         if name == "Verma":
             print(f"    (fixed strength: TARGET_PSNR is ignored for {name})")
+        elif not np.isfinite(psnr) or abs(psnr - TARGET_PSNR) > 0.05:
+            raise RuntimeError(
+                f"{name}: embedding PSNR is {psnr:.4f} dB; "
+                f"expected {TARGET_PSNR:.4f} +/- 0.05 dB."
+            )
     return methods
+
+
+def verify_no_attack_extraction(methods, bits):
+    """攻撃前の埋め込み済みモデルから全方式が完全抽出できることを確認する。"""
+    print("\nNo-attack extraction check:")
+    for name, method in methods.items():
+        extracted = run_trial_call(method["extract"], method["vertices"])
+        ber = bit_error_rate(bits, extracted)
+        print(f"  {name:<20} BER={ber:.4f}")
+        if ber != 0.0:
+            raise RuntimeError(
+                f"{name}: no-attack BER must be 0 before robustness experiments; "
+                f"got {ber:.6f}."
+            )
+
+
+def trial_count_for_attack(attack_type):
+    """乱数を使う攻撃のみ複数回試行し、決定論的攻撃の重複実行を避ける。"""
+    if attack_type == "noise":
+        return NUM_TRIALS
+    if attack_type == "downsampling" and DOWNSAMPLING_MODE in {"random", "fps"}:
+        return NUM_TRIALS
+    return 1
 
 
 def run_robustness_experiment(methods, bits, attack_type, parameters):
     results = {name: [] for name in methods}
+    trial_count = trial_count_for_attack(attack_type)
     for parameter in parameters:
-        print(f"  {attack_type}={parameter}: {NUM_TRIALS} trials")
+        print(f"  {attack_type}={parameter}: {trial_count} trial(s)")
         sums = {name: 0.0 for name in methods}
-        for trial in range(NUM_TRIALS):
+        for trial in range(trial_count):
             seed = 42 + trial
             for name, method in methods.items():
                 try:
@@ -425,29 +443,19 @@ def run_robustness_experiment(methods, bits, attack_type, parameters):
                     extracted = run_trial_call(method["extract"], attacked)
                     sums[name] += bit_error_rate(bits, extracted)
                 except Exception as error:
-                    print(f"    [{name}] extraction failed: {error}")
-                    # 抽出不能は、その試行の全ビットが誤りだったものとして扱う。
-                    sums[name] += 1.0
+                    raise RuntimeError(
+                        f"{name}: {attack_type}={parameter}, trial={trial + 1} "
+                        f"failed."
+                    ) from error
         for name in methods:
-            results[name].append(sums[name] / NUM_TRIALS)
+            results[name].append(sums[name] / trial_count)
     return results
 
 
 def run_visual_quality_experiment(methods, original):
-    totals = {
-        name: {metric: 0.0 for metric in (
-            "PC-MSDM", "AngularSimilarity", "P2D", "PointSSIM"
-        )}
-        for name in methods
-    }
-    for _ in range(NUM_TRIALS):
-        for name, method in methods.items():
-            scores = visual_quality_scores(original, method["vertices"])
-            for metric, value in scores.items():
-                totals[name][metric] += value
     return {
-        name: {metric: value / NUM_TRIALS for metric, value in scores.items()}
-        for name, scores in totals.items()
+        name: visual_quality_scores(original, method["vertices"])
+        for name, method in methods.items()
     }
 
 
@@ -464,7 +472,10 @@ def print_robustness_table(attack_type, parameters, results, methods):
     parameter_labels = [str(parameter) for parameter in parameters]
     method_width = max(20, *(len(label) for label in method_labels))
     value_width = max(12, *(len(label) for label in parameter_labels))
-    print(f"\nRobustness: {attack_type}, BER, trials={NUM_TRIALS}")
+    print(
+        f"\nRobustness: {attack_type}, BER, "
+        f"trials={trial_count_for_attack(attack_type)}"
+    )
     header = [f"{'Method':<{method_width}}"]
     header.extend(f"{label:>{value_width}}" for label in parameter_labels)
     print(" | ".join(header))
@@ -477,7 +488,7 @@ def print_robustness_table(attack_type, parameters, results, methods):
 
 def print_visual_quality_table(results, methods):
     metrics = ("PC-MSDM", "AngularSimilarity", "P2D", "PointSSIM")
-    print(f"\nVisual quality without attack, trials={NUM_TRIALS} (higher is better)")
+    print("\nVisual quality without attack, trials=1 (higher is better)")
     print(" | ".join(f"{value:<20}" for value in ("Method", *metrics)))
     print("-" * 115)
     for name, scores in results.items():
@@ -491,11 +502,9 @@ def print_visual_quality_table(results, methods):
 def main():
     np.random.seed(42)
     vertices, triangles = load_mesh()
-    try:
-        bits = DW2F.image_to_bitarray(IMAGE_PATH, n=WATERMARK_SIZE)
-    except Exception as error:
-        print(f"Watermark load failed ({error}); using reproducible random bits.")
-        bits = np.random.randint(0, 2, WATERMARK_SIZE**2).tolist()
+    if not os.path.isfile(IMAGE_PATH):
+        raise FileNotFoundError(f"Watermark image not found: {IMAGE_PATH}")
+    bits = DW2F.image_to_bitarray(IMAGE_PATH, n=WATERMARK_SIZE)
 
     target_mse = calculate_target_mse(vertices, TARGET_PSNR)
     print(
@@ -503,6 +512,7 @@ def main():
         f"watermark={len(bits)} bits; target PSNR={TARGET_PSNR} dB"
     )
     methods = prepare_methods(vertices, triangles, bits, target_mse)
+    verify_no_attack_extraction(methods, bits)
 
     for experiment_type, parameters in EXPERIMENTS:
         if experiment_type == "visual_quality":

@@ -2,11 +2,8 @@ import numpy as np
 import open3d as o3d
 import random
 import string
-from sklearn.cluster import KMeans
 from scipy.spatial import cKDTree
-from concurrent.futures import ProcessPoolExecutor
-from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbors_graph
-import scipy.sparse as sp
+from sklearn.neighbors import NearestNeighbors
 from PIL import Image
 
 # 攻撃後点群の代表的な点間隔に対する、対応許容距離の倍率
@@ -52,7 +49,7 @@ def binary_to_string(extracted_binary_list):
             break
         try:
             chars.append(chr(int(byte, 2)))
-        except:
+        except ValueError:
             chars.append('?')  # デコード不可な場合は?にする
     return ''.join(chars)
 
@@ -416,8 +413,18 @@ def evaluate_robustness(watermark_bits, extracted_bits, verbose=True):
     """
     
     # numpy配列に変換
-    w = np.array(watermark_bits, dtype=float)
-    w_ = np.array(extracted_bits, dtype=float)
+    w = np.asarray(watermark_bits, dtype=float).reshape(-1)
+    w_ = np.asarray(extracted_bits, dtype=float).reshape(-1)
+    if w.size == 0:
+        raise ValueError("watermark_bits must not be empty.")
+    if w_.size != w.size:
+        raise ValueError(
+            f"透かし長が一致しません: expected={w.size}, extracted={w_.size}"
+        )
+    if not np.all(np.isin(w, (0, 1))):
+        raise ValueError("watermark_bits must contain only 0 and 1.")
+    if not np.all(np.isin(w_, (-1, 0, 1))):
+        raise ValueError("extracted_bits must contain only -1, 0 and 1.")
 
     # --- BER計算 ---
     # 単純な一致率から計算
@@ -873,7 +880,7 @@ def noise_addition_attack(xyz, noise_percent=1.0, mode='uniform', seed=None):
 
 def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
     """
-    xyz_after に対して切り取り攻撃を行い、一部の点群のみを残し、表示する。
+    xyz_after に対して切り取り攻撃を行い、一部の点群のみを残す。
 
     Parameters:
     - xyz_after (np.ndarray): 埋め込み後の点群座標（N×3）
@@ -921,15 +928,6 @@ def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
     xyz_cropped = xyz_after[keep_indices]
 
     print(f"[Attack] 切り取り攻撃 ({mode}): 元点数={N} → 残点数={keep_n} ({keep_ratio*100:.1f}%)")
-
-    # 可視化
-    cropped_pcd = o3d.geometry.PointCloud()
-    cropped_pcd.points = o3d.utility.Vector3dVector(xyz_cropped)
-    cropped_pcd.paint_uniform_color([1, 0.6, 0])  # オレンジ系で表示
-    
-    # 軸などのガイドを表示するためにフレームを追加
-    mesh_frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=[0, 0, 0])
-    # o3d.visualization.draw_geometries([cropped_pcd, mesh_frame], window_name=f"Cropped Point Cloud ({mode})")
 
     return xyz_cropped
 

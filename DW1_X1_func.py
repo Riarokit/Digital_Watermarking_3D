@@ -1,15 +1,8 @@
 import numpy as np
 import open3d as o3d
-import random
-import string
 from sklearn.cluster import KMeans
 import DW2_func as DW2F
-from concurrent.futures import ProcessPoolExecutor
 from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbors_graph
-import scipy.sparse as sp
-import zlib
-from PIL import Image
-import copy
 try:
     import cupy as cp
 except ImportError:
@@ -20,8 +13,17 @@ except ImportError:
 # =========================================================
 
 def kmeans_cluster_points(xyz, cluster_point=1000, seed=42):
+    xyz = np.asarray(xyz)
+    if xyz.ndim != 2 or xyz.shape[1] != 3 or len(xyz) == 0:
+        raise ValueError("xyz must have shape (N, 3) and be non-empty.")
+    if cluster_point <= 0:
+        raise ValueError("cluster_point must be positive.")
     num_clusters = len(xyz) // cluster_point
-    kmeans = KMeans(n_clusters=num_clusters, random_state=seed)
+    if num_clusters < 1:
+        raise ValueError(
+            f"cluster_point={cluster_point} exceeds the vertex count {len(xyz)}."
+        )
+    kmeans = KMeans(n_clusters=num_clusters, random_state=seed, n_init=10)
     labels = kmeans.fit_predict(xyz)
     
     # 各クラスタごとの点数を集計
@@ -58,7 +60,9 @@ def split_large_clusters(xyz, labels, limit_points=3000, seed=42):
 
         pts = xyz[idx]
         n_subclusters = int(np.ceil(len(idx) / limit_points))
-        kmeans = KMeans(n_clusters=n_subclusters, random_state=seed)
+        kmeans = KMeans(
+            n_clusters=n_subclusters, random_state=seed, n_init=10
+        )
         sub_labels = kmeans.fit_predict(pts)
 
         # ラベルを更新
