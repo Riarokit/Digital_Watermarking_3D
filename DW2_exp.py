@@ -16,8 +16,8 @@ import DW2_func as DW2F
 
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
-# INPUT_FILE = "C:/bun_zipper.ply"
-INPUT_FILE = "C:/dragon.ply"
+INPUT_FILE = "C:/bun_zipper.ply"
+# INPUT_FILE = "C:/dragon.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
@@ -39,15 +39,15 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [0.6, 0.8, 1.0, 1.2]),
-    ("smoothing", [10, 20, 30, 40]),
-    ("cropping", [0.9, 0.7, 0.5, 0.3]),
+    ("noise", [0.5, 1.0, 1.5, 2.0, 2.5]),
+    ("smoothing", [20, 30, 40, 50, 60]),
+    ("cropping", [0.6, 0.5, 0.4, 0.3, 0.2]),
     ("downsampling", [0.5, 1.0, 1.5, 2.0]),
     ("visual_quality", [None]),
 ]
 
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.2
+SMOOTHING_LAMBDA = 0.3
 SMOOTHING_K = 6
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0

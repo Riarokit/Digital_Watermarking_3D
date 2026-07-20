@@ -443,6 +443,12 @@ def extract_watermark_hu_mesh(vertices, triangles, key_info):
     """論文 Algorithm 2、式 (12)、式 (13) に基づいて透かしを抽出する。"""
     if not isinstance(key_info, HuWatermarkKey):
         raise TypeError("key_info must be the HuWatermarkKey returned by embed_watermark_hu_mesh.")
+    attacked_vertex_count = len(vertices)
+    original_triangles = np.asarray(triangles, dtype=np.int64)
+    original_vertex_count = (
+        int(original_triangles.max()) + 1 if len(original_triangles) else 0
+    )
+    preserves_original_vertices = attacked_vertex_count == original_vertex_count
     vertices, triangles = _prepare_extraction_mesh(vertices, triangles)
     centered = vertices - np.mean(vertices, axis=0)
     rho = np.linalg.norm(centered, axis=1)
@@ -450,7 +456,16 @@ def extract_watermark_hu_mesh(vertices, triangles, key_info):
     if rho_max <= 1e-15:
         raise ValueError("全頂点が同一点のため、抽出できません。")
     imf1, _ = surface_emd_sifting(vertices, triangles, rho / rho_max, t=key_info.extreme_parameter)
-    matched, valid_carriers = _match_embedding_positions(vertices, key_info)
+    if preserves_original_vertices:
+        # 論文 Algorithm 2 では、類似変換攻撃の場合だけ保存極値との
+        # registration を行う。ノイズやスムージングのように元の頂点集合を
+        # 保つ攻撃では、埋め込み時に記録した極値位置をそのまま参照する。
+        matched = np.asarray(key_info.embedding_indices, dtype=np.int64)
+        valid_carriers = (matched >= 0) & (matched < len(vertices))
+    else:
+        # 接続情報を失う独自の切り取り・ダウンサンプリング評価では、
+        # 再構築後メッシュに頂点番号を引き継げないため保存極値座標を使う。
+        matched, valid_carriers = _match_embedding_positions(vertices, key_info)
 
     wm_len = key_info.watermark_size ** 2
     vote_count = np.zeros(wm_len, dtype=np.int64)
