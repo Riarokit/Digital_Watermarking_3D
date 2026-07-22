@@ -36,6 +36,7 @@ class HuWatermarkKey:
     arnold_iterations: int
     extreme_parameter: float
     epsilon: float
+    original_triangles: np.ndarray
 
 
 def _validate_mesh(vertices, triangles):
@@ -99,16 +100,16 @@ def _reconstruct_mesh_from_points(vertices):
     return reconstructed_vertices, reconstructed_triangles
 
 
-def _prepare_extraction_mesh(vertices, original_triangles):
-    """Use original connectivity only while the original vertex set remains."""
+def _prepare_extraction_mesh(vertices, triangles):
+    """Use valid supplied connectivity, reconstructing only legacy point input."""
     vertices = np.asarray(vertices, dtype=float)
-    original_triangles = np.asarray(original_triangles, dtype=np.int64)
-    original_vertex_count = (
-        int(original_triangles.max()) + 1 if len(original_triangles) else 0
+    triangles = np.asarray(triangles, dtype=np.int64)
+    referenced_vertex_count = (
+        int(triangles.max()) + 1 if len(triangles) else 0
     )
-    if len(vertices) != original_vertex_count:
+    if len(vertices) != referenced_vertex_count:
         return _reconstruct_mesh_from_points(vertices)
-    return _validate_mesh(vertices, original_triangles)
+    return _validate_mesh(vertices, triangles)
 
 
 def get_mesh_laplacian(vertices, triangles):
@@ -389,6 +390,7 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
         arnold_iterations=arnold_iterations,
         extreme_parameter=extreme_parameter,
         epsilon=epsilon,
+        original_triangles=triangles.copy(),
     )
     return watermarked, key, alpha
 
@@ -444,11 +446,16 @@ def extract_watermark_hu_mesh(vertices, triangles, key_info):
     if not isinstance(key_info, HuWatermarkKey):
         raise TypeError("key_info must be the HuWatermarkKey returned by embed_watermark_hu_mesh.")
     attacked_vertex_count = len(vertices)
-    original_triangles = np.asarray(triangles, dtype=np.int64)
+    attacked_triangles = np.asarray(triangles, dtype=np.int64)
     original_vertex_count = (
-        int(original_triangles.max()) + 1 if len(original_triangles) else 0
+        int(key_info.original_triangles.max()) + 1
+        if len(key_info.original_triangles)
+        else 0
     )
-    preserves_original_vertices = attacked_vertex_count == original_vertex_count
+    preserves_original_vertices = (
+        attacked_vertex_count == original_vertex_count
+        and np.array_equal(attacked_triangles, key_info.original_triangles)
+    )
     vertices, triangles = _prepare_extraction_mesh(vertices, triangles)
     centered = vertices - np.mean(vertices, axis=0)
     rho = np.linalg.norm(centered, axis=1)

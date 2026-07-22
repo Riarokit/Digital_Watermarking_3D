@@ -59,6 +59,7 @@ if __name__ == "__main__":
     except ValueError as error:
         raise RuntimeError(f"Verma法の埋め込みに失敗しました: {error}") from error
     embed_time = time.time() - start_embed
+    triangles_after = triangles.copy()
 
     # OP. ノイズ攻撃
     xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.1, mode="gaussian", seed=42)
@@ -67,19 +68,29 @@ if __name__ == "__main__":
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=10)
 
     # OP. 切り取り攻撃（不可視性評価はコメントアウト）
-    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
+    # xyz_after, triangles_after = DW2F.cropping_attack(
+    #     xyz_after, keep_ratio=0.9, mode='axis', axis=0, triangles=triangles_after
+    # )
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.0, seed=42)
+    # xyz_after, triangles_after = DW2F.downsampling_attack(
+    #     xyz_after, mode='voxel', voxel_size_percent=1.0,
+    #     seed=42, triangles=triangles_after
+    # )
 
     # OP. 頂点順序攻撃（座標と点数を変えず、配列順序だけをランダム化）
-    # xyz_after = DW2F.vertex_reordering_attack(xyz_after, reorder_ratio=1.0, seed=42)
+    # xyz_after, triangles_after = DW2F.vertex_reordering_attack(
+    #     xyz_after, reorder_ratio=1.0, seed=42, triangles=triangles_after
+    # )
 
     # 5. 抽出処理
     start_extract = time.time()
-    extracted_bits = DW1VER.extract_watermark_verma_mesh(
-        xyz, xyz_after, triangles, key_info=key_info
-    )
+    if np.asarray(xyz_after).shape != np.asarray(xyz).shape:
+        extracted_bits = [-1] * len(watermark_bits)
+    else:
+        extracted_bits = DW1VER.extract_watermark_verma_mesh(
+            xyz, xyz_after, triangles, key_info=key_info
+        )
     extract_time = time.time() - start_extract
 
     # 6. 視覚品質評価

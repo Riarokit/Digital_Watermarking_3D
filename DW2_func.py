@@ -799,7 +799,9 @@ def noise_addition_attack(xyz, noise_percent=1.0, mode='uniform', seed=None):
     xyz_noisy = xyz + noise
     return xyz_noisy
 
-def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
+def cropping_attack(
+    xyz_after, keep_ratio=0.5, mode='center', axis=1, triangles=None
+):
     """
     xyz_after に対して切り取り攻撃を行い、一部の点群のみを残す。
 
@@ -812,10 +814,18 @@ def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
         - 'axis': 指定した軸に沿って端から切断する
     - axis (int): 'axis' モードで使用する切断軸 (0:X軸, 1:Y軸, 2:Z軸)
 
+    When ``triangles`` is omitted this works as a point-cloud attack and
+    returns only vertices. With ``triangles`` it returns a valid open-boundary
+    mesh as ``(vertices, triangles)``.
+
     Returns:
     - xyz_cropped (np.ndarray): 切り取り後の点群座標
     """
-    assert 0.0 < keep_ratio <= 1.0, "keep_ratioは (0, 1] で指定してください"
+    xyz_after = np.asarray(xyz_after, dtype=np.float64)
+    if xyz_after.ndim != 2 or xyz_after.shape[1] != 3 or len(xyz_after) == 0:
+        raise ValueError("xyz_after must have shape (N, 3) and be non-empty.")
+    if not 0.0 < keep_ratio <= 1.0:
+        raise ValueError("keep_ratio must be in (0, 1].")
     N = xyz_after.shape[0]
     keep_n = int(N * keep_ratio)
 
@@ -846,23 +856,49 @@ def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
     else:
         raise ValueError("modeは 'center', 'edge', 'axis' のいずれかを指定してください")
 
-    xyz_cropped = xyz_after[keep_indices]
+    if triangles is None:
+        xyz_cropped = xyz_after[keep_indices]
+        print(
+            f"[Attack] Cropping ({mode}): vertices={N} -> "
+            f"{len(xyz_cropped)} ({keep_ratio * 100:.1f}%)"
+        )
+        return xyz_cropped
 
-    print(f"[Attack] 切り取り攻撃 ({mode}): 元点数={N} → 残点数={keep_n} ({keep_ratio*100:.1f}%)")
+    # Remove every face incident to a cropped vertex, then compact and remap
+    # the remaining indexed mesh. The cut boundary is intentionally left open.
+    triangles = np.asarray(triangles, dtype=np.int64)
+    if triangles.ndim != 2 or triangles.shape[1] != 3:
+        raise ValueError("triangles must have shape (M, 3).")
+    if len(triangles) == 0 or np.any(triangles < 0) or np.any(triangles >= N):
+        raise ValueError("triangles must be non-empty and contain valid indices.")
+    keep_mask = np.zeros(N, dtype=bool)
+    keep_mask[keep_indices] = True
+    cropped_triangles = triangles[np.all(keep_mask[triangles], axis=1)]
+    if len(cropped_triangles) == 0:
+        raise ValueError("Cropping removed every triangle from the mesh.")
+    xyz_cropped, cropped_triangles, _ = remove_unreferenced_vertices(
+        xyz_after, cropped_triangles
+    )
 
-    return xyz_cropped
+    print(
+        f"[Attack] Mesh cropping ({mode}): vertices={N} -> "
+        f"{len(xyz_cropped)}, triangles={len(triangles)} -> "
+        f"{len(cropped_triangles)} ({keep_ratio * 100:.1f}% vertex selection)"
+    )
+    return xyz_cropped, cropped_triangles
 
 
-def vertex_reordering_attack(xyz, reorder_ratio=1.0, seed=None):
+def vertex_reordering_attack(
+    xyz, reorder_ratio=1.0, seed=None, triangles=None
+):
     """Randomly reorder point rows without changing coordinates or point count.
 
     ``reorder_ratio`` is the fraction of row positions participating in the
     permutation.  ``1.0`` applies a full vertex-reordering attack; smaller
     values can be used to evaluate partial reordering.
 
-    The input is treated as a point cloud. Face indices are not modified when
-    the rows happen to represent mesh vertices, because this attack tests the
-    extraction method's vertex-correspondence handling.
+    For mesh input, pass ``triangles``. Face indices are remapped with the
+    inverse permutation so geometry and connectivity remain unchanged.
     """
     xyz = np.asarray(xyz)
     if xyz.ndim != 2 or xyz.shape[1] != 3:
@@ -878,16 +914,35 @@ def vertex_reordering_attack(xyz, reorder_ratio=1.0, seed=None):
             f"[Attack] Vertex reordering: {reorder_count}/{vertex_count} "
             "vertices selected; no order change"
         )
-        return attacked
+        if triangles is None:
+            return attacked
+        triangles = np.asarray(triangles, dtype=np.int64)
+        if triangles.ndim != 2 or triangles.shape[1] != 3:
+            raise ValueError("triangles must have shape (M, 3).")
+        return attacked, triangles.copy()
 
     rng = np.random.RandomState(seed)
     selected_indices = rng.choice(vertex_count, reorder_count, replace=False)
-    attacked[selected_indices] = xyz[rng.permutation(selected_indices)]
+    permutation = np.arange(vertex_count, dtype=np.int64)
+    permutation[selected_indices] = rng.permutation(selected_indices)
+    attacked = xyz[permutation].copy()
     print(
         f"[Attack] Vertex reordering: {reorder_count}/{vertex_count} "
         f"vertices ({reorder_ratio * 100:.1f}%), seed={seed}"
     )
-    return attacked
+    if triangles is None:
+        return attacked
+
+    triangles = np.asarray(triangles, dtype=np.int64)
+    if triangles.ndim != 2 or triangles.shape[1] != 3:
+        raise ValueError("triangles must have shape (M, 3).")
+    if len(triangles) and (
+        np.any(triangles < 0) or np.any(triangles >= vertex_count)
+    ):
+        raise ValueError("triangles contains an out-of-range vertex index.")
+    inverse_permutation = np.empty(vertex_count, dtype=np.int64)
+    inverse_permutation[permutation] = np.arange(vertex_count, dtype=np.int64)
+    return attacked, inverse_permutation[triangles]
 
 
 def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
@@ -934,7 +989,14 @@ def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
         
     return xyz_smooth
 
-def downsampling_attack(xyz, keep_ratio=0.5, mode='voxel', voxel_size_percent=1.0, seed=None):
+def downsampling_attack(
+    xyz,
+    keep_ratio=0.5,
+    mode='voxel',
+    voxel_size_percent=1.0,
+    seed=None,
+    triangles=None,
+):
     """
     点群に対してダウンサンプリング攻撃を行う。
     
@@ -948,13 +1010,57 @@ def downsampling_attack(xyz, keep_ratio=0.5, mode='voxel', voxel_size_percent=1.
     - voxel_size_percent (float): 'voxel' モード時のボクセルサイズ（対角線長に対するパーセンテージ）
     - seed (int): ランダムシード（再現性用）
     
+    When ``triangles`` is omitted, all existing point-cloud modes remain
+    available and only vertices are returned. With ``triangles``, voxel vertex
+    clustering is used and ``(vertices, triangles)`` is returned.
+
     Returns:
     - xyz_downsampled (np.ndarray): ダウンサンプリング後の点群（M×3, M <= N）
     """
     if keep_ratio <= 0.0 or keep_ratio > 1.0:
         raise ValueError("keep_ratioは (0, 1] の範囲で指定してください。")
         
+    xyz = np.asarray(xyz, dtype=np.float64)
+    if xyz.ndim != 2 or xyz.shape[1] != 3 or len(xyz) == 0:
+        raise ValueError("xyz must have shape (N, 3) and be non-empty.")
     N = xyz.shape[0]
+
+    # Open3D's vertex-clustering simplifier updates both vertices and faces,
+    # producing a valid downsampled mesh instead of an unconnected point set.
+    if triangles is not None:
+        if mode != 'voxel':
+            raise ValueError(
+                "Mesh downsampling currently supports mode='voxel' only. "
+                "Use triangles=None for random or FPS point-cloud sampling."
+            )
+        triangles = np.asarray(triangles, dtype=np.int64)
+        if triangles.ndim != 2 or triangles.shape[1] != 3 or len(triangles) == 0:
+            raise ValueError("triangles must have shape (M, 3) and be non-empty.")
+        if np.any(triangles < 0) or np.any(triangles >= N):
+            raise ValueError("triangles contains an out-of-range vertex index.")
+        scale_base = np.linalg.norm(np.ptp(xyz, axis=0))
+        voxel_size = scale_base * voxel_size_percent / 100
+        if voxel_size <= 0:
+            raise ValueError("voxel_size_percent must produce a positive size.")
+        mesh = o3d.geometry.TriangleMesh()
+        mesh.vertices = o3d.utility.Vector3dVector(xyz)
+        mesh.triangles = o3d.utility.Vector3iVector(triangles)
+        simplified = mesh.simplify_vertex_clustering(voxel_size=voxel_size)
+        simplified.remove_degenerate_triangles()
+        simplified.remove_duplicated_triangles()
+        simplified.remove_duplicated_vertices()
+        simplified.remove_unreferenced_vertices()
+        xyz_downsampled = np.asarray(simplified.vertices).copy()
+        triangles_downsampled = np.asarray(simplified.triangles).copy()
+        if len(xyz_downsampled) == 0 or len(triangles_downsampled) == 0:
+            raise ValueError("Mesh downsampling removed all usable geometry.")
+        print(
+            f"[Attack] Mesh voxel downsampling (voxel_size={voxel_size:.6f}, "
+            f"{voxel_size_percent:.2f}%): vertices={N} -> "
+            f"{len(xyz_downsampled)}, triangles={len(triangles)} -> "
+            f"{len(triangles_downsampled)}"
+        )
+        return xyz_downsampled, triangles_downsampled
     
     if mode == 'random':
         rng = np.random.RandomState(seed)

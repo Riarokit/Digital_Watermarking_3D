@@ -105,6 +105,7 @@ if __name__ == "__main__":
         print(f"[Error] Luke法の埋め込みに失敗しました: {exc}")
         raise
     embed_time = time.time() - start_embed
+    triangles_after = triangles.copy()
 
     print(f"[Luke] 歪み判定前の選択面数: {embed_details['selected_size_before_refinement']}")
     print(f"[Luke] 歪み閾値による除外面数: {embed_details['rejected_by_distortion']}")
@@ -131,18 +132,25 @@ if __name__ == "__main__":
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.1, iterations=10)
 
     # OP. 切り取り攻撃（不可視性評価はコメントアウト）
-    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.9, mode='axis', axis=0)
+    # xyz_after, triangles_after = DW2F.cropping_attack(
+    #     xyz_after, keep_ratio=0.9, mode='axis', axis=0, triangles=triangles_after
+    # )
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.0, seed=42)
+    # xyz_after, triangles_after = DW2F.downsampling_attack(
+    #     xyz_after, mode='voxel', voxel_size_percent=1.0,
+    #     seed=42, triangles=triangles_after
+    # )
 
     # OP. 頂点順序攻撃（座標と点数を変えず、配列順序だけをランダム化）
-    # xyz_after = DW2F.vertex_reordering_attack(xyz_after, reorder_ratio=1.0, seed=42)
+    # xyz_after, triangles_after = DW2F.vertex_reordering_attack(
+    #     xyz_after, reorder_ratio=1.0, seed=42, triangles=triangles_after
+    # )
 
     # 5. 抽出処理
     start_extract = time.time()
     extracted_bits, extract_details = DW1LUKE.extract_watermark_luke_mesh(
-        xyz_after, triangles, key_info,
+        xyz_after, triangles_after, key_info,
         translation_align=True, rotation_align=True, return_details=True,
     )
     extract_time = time.time() - start_extract

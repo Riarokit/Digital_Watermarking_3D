@@ -107,7 +107,7 @@ if __name__ == "__main__":
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=2.0, seed=42)
 
-    # OP. 頂点順序攻撃（座標と点数を変えず、配列順序だけをランダム化）
+    # OP. 頂点順序攻撃
     # xyz_after = DW2F.vertex_reordering_attack(xyz_after, reorder_ratio=0.01, seed=42)
 
     # 6. 単多数決方式の抽出

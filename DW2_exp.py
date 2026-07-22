@@ -39,11 +39,11 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    # ("noise", [1.5, 2.0, 2.5]),
-    # ("smoothing", [50, 60]),
-    ("reordering", [0.25, 0.5, 0.75, 1.0]),
-    # ("cropping", [0.6, 0.5, 0.4, 0.3, 0.2]),
-    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
+    ("noise", [1.0, 2.0, 3.0]),
+    ("smoothing", [20, 40, 60]),
+    ("reordering", [0.1, 0.5, 1.0]),
+    ("cropping", [0.7, 0.5, 0.3]),
+    ("downsampling", [1.0, 1.5, 2.0]),
     # ("visual_quality", [None]),
 ]
 
@@ -96,24 +96,27 @@ def embedding_quality(vertices, marked_vertices):
     return metrics["mse"], metrics["psnr"]
 
 
-def apply_attack(vertices, attack_type, parameter, seed):
+def apply_attack(vertices, triangles, attack_type, parameter, seed):
     if attack_type == "noise":
-        return DW2F.noise_addition_attack(
+        attacked = DW2F.noise_addition_attack(
             vertices, noise_percent=parameter, mode=NOISE_MODE, seed=seed
         )
+        return attacked, np.asarray(triangles).copy()
     if attack_type == "smoothing":
-        return DW2F.smoothing_attack(
+        attacked = DW2F.smoothing_attack(
             vertices,
             lambda_val=SMOOTHING_LAMBDA,
             iterations=int(parameter),
             k=SMOOTHING_K,
         )
+        return attacked, np.asarray(triangles).copy()
     if attack_type == "cropping":
         return DW2F.cropping_attack(
             vertices,
             keep_ratio=parameter,
             mode=CROPPING_MODE,
             axis=CROPPING_AXIS,
+            triangles=triangles,
         )
     if attack_type == "downsampling":
         return DW2F.downsampling_attack(
@@ -121,13 +124,14 @@ def apply_attack(vertices, attack_type, parameter, seed):
             mode=DOWNSAMPLING_MODE,
             voxel_size_percent=parameter,
             seed=seed,
+            triangles=triangles,
         )
     if attack_type == "reordering":
         return DW2F.vertex_reordering_attack(
-            vertices, reorder_ratio=parameter, seed=seed
+            vertices, reorder_ratio=parameter, seed=seed, triangles=triangles
         )
     if attack_type == "visual_quality":
-        return np.asarray(vertices).copy()
+        return np.asarray(vertices).copy(), np.asarray(triangles).copy()
     raise ValueError(f"Unknown experiment type: {attack_type}")
 
 
@@ -312,7 +316,8 @@ def prepare_methods(
         )
         methods["ElZein"] = {
             "vertices": marked,
-            "extract": lambda attacked: (
+            "triangles": triangles,
+            "extract": lambda attacked, _attacked_triangles: (
                 DW1ELZ.extract_watermark_elzein_mesh(
                     attacked,
                     vertices,
@@ -334,8 +339,11 @@ def prepare_methods(
             )
             methods["Hu"] = {
                 "vertices": hu_marked,
-                "extract": lambda attacked: (
-                    DW1HU.extract_watermark_hu_mesh(attacked, triangles, hu_key)
+                "triangles": triangles,
+                "extract": lambda attacked, attacked_triangles: (
+                    DW1HU.extract_watermark_hu_mesh(
+                        attacked, attacked_triangles, hu_key
+                    )
                 ),
             }
             deterministic_cache["Hu"] = methods["Hu"]
@@ -351,11 +359,15 @@ def prepare_methods(
             )
             methods["Verma"] = {
                 "vertices": verma_marked,
-                "extract": lambda attacked: DW1VER.extract_watermark_verma_mesh(
-                    vertices,
-                    attacked,
-                    triangles,
-                    key_info=verma_key,
+                "triangles": triangles,
+                "extract": (
+                    lambda attacked, _attacked_triangles: (
+                        [-1] * len(bits)
+                        if np.asarray(attacked).shape != vertices.shape
+                        else DW1VER.extract_watermark_verma_mesh(
+                            vertices, attacked, triangles, key_info=verma_key
+                        )
+                    )
                 ),
             }
             deterministic_cache["Verma"] = methods["Verma"]
@@ -391,22 +403,26 @@ def prepare_methods(
                 )
                 methods[name] = {
                     "vertices": marked,
-                    "extract": lambda attacked, lab=labels, lo=min_spectrum, hi=max_spectrum: (
-                        DW1X1.extract_watermark_x1(
-                            attacked,
-                            vertices,
-                            lab,
-                            len(bits),
-                            graph_mode=GRAPH_MODE,
-                            k=KNN_K,
-                            radius=GRAPH_RADIUS,
-                            min_spectre=lo,
-                            max_spectre=hi,
-                            match_distance_factor=MATCH_DISTANCE_FACTOR,
-                            order_check_k=ORDER_CHECK_K,
-                            order_check_edge_factor=ORDER_CHECK_EDGE_FACTOR,
-                            order_check_max_bad_ratio=ORDER_CHECK_MAX_BAD_RATIO,
-                            order_check_max_samples=ORDER_CHECK_MAX_SAMPLES,
+                    "triangles": triangles,
+                    "extract": (
+                        lambda attacked, _attacked_triangles, lab=labels,
+                        lo=min_spectrum, hi=max_spectrum: (
+                            DW1X1.extract_watermark_x1(
+                                attacked,
+                                vertices,
+                                lab,
+                                len(bits),
+                                graph_mode=GRAPH_MODE,
+                                k=KNN_K,
+                                radius=GRAPH_RADIUS,
+                                min_spectre=lo,
+                                max_spectre=hi,
+                                match_distance_factor=MATCH_DISTANCE_FACTOR,
+                                order_check_k=ORDER_CHECK_K,
+                                order_check_edge_factor=ORDER_CHECK_EDGE_FACTOR,
+                                order_check_max_bad_ratio=ORDER_CHECK_MAX_BAD_RATIO,
+                                order_check_max_samples=ORDER_CHECK_MAX_SAMPLES,
+                            )
                         )
                     ),
                 }
@@ -432,7 +448,9 @@ def verify_no_attack_extraction(methods, bits):
     """攻撃前の埋め込み済みモデルから全方式が完全抽出できることを確認する。"""
     print("\nNo-attack extraction check:")
     for name, method in methods.items():
-        extracted = run_trial_call(method["extract"], method["vertices"])
+        extracted = run_trial_call(
+            method["extract"], method["vertices"], method["triangles"]
+        )
         ber = bit_error_rate(bits, extracted)
         print(f"  {name:<20} BER={ber:.4f}")
         if ber != 0.0:
@@ -464,14 +482,17 @@ def run_robustness_experiment(method_variants, bits, attack_type, parameters):
                 for attack_trial in range(trial_count):
                     seed = ATTACK_SEED_BASE + attack_trial
                     try:
-                        attacked = run_trial_call(
+                        attacked, attacked_triangles = run_trial_call(
                             apply_attack,
                             method["vertices"],
+                            method["triangles"],
                             attack_type,
                             parameter,
                             seed,
                         )
-                        extracted = run_trial_call(method["extract"], attacked)
+                        extracted = run_trial_call(
+                            method["extract"], attacked, attacked_triangles
+                        )
                         ber_values.append(bit_error_rate(bits, extracted))
                     except Exception as error:
                         raise RuntimeError(
