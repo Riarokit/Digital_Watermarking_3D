@@ -852,6 +852,44 @@ def cropping_attack(xyz_after, keep_ratio=0.5, mode='center', axis=1):
 
     return xyz_cropped
 
+
+def vertex_reordering_attack(xyz, reorder_ratio=1.0, seed=None):
+    """Randomly reorder point rows without changing coordinates or point count.
+
+    ``reorder_ratio`` is the fraction of row positions participating in the
+    permutation.  ``1.0`` applies a full vertex-reordering attack; smaller
+    values can be used to evaluate partial reordering.
+
+    The input is treated as a point cloud. Face indices are not modified when
+    the rows happen to represent mesh vertices, because this attack tests the
+    extraction method's vertex-correspondence handling.
+    """
+    xyz = np.asarray(xyz)
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError("xyz must have shape (N, 3).")
+    if not 0.0 <= reorder_ratio <= 1.0:
+        raise ValueError("reorder_ratio must be in [0, 1].")
+
+    vertex_count = len(xyz)
+    attacked = xyz.copy()
+    reorder_count = min(vertex_count, int(round(vertex_count * reorder_ratio)))
+    if reorder_count < 2:
+        print(
+            f"[Attack] Vertex reordering: {reorder_count}/{vertex_count} "
+            "vertices selected; no order change"
+        )
+        return attacked
+
+    rng = np.random.RandomState(seed)
+    selected_indices = rng.choice(vertex_count, reorder_count, replace=False)
+    attacked[selected_indices] = xyz[rng.permutation(selected_indices)]
+    print(
+        f"[Attack] Vertex reordering: {reorder_count}/{vertex_count} "
+        f"vertices ({reorder_ratio * 100:.1f}%), seed={seed}"
+    )
+    return attacked
+
+
 def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
     """
     点群に対してラプラシアンスムージング攻撃を行う

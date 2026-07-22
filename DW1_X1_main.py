@@ -34,7 +34,7 @@ if __name__ == "__main__":
     # 同数点群で頂点順序が維持されているかを判定する設定
     order_check_k = 6                 # 元点群で調べる近傍数
     order_check_edge_factor = 10.0     # 攻撃後点間隔に対するアウト辺判定倍率
-    order_check_max_bad_ratio = 0.25  # アウト辺を許容する最大割合
+    order_check_max_bad_ratio = 0.005  # アウト辺を許容する最大割合
     order_check_max_samples = 20000   # 判定に使う最大頂点数
     match_distance_factor = 10.0       # 座標対応を許容する点間隔倍率
     # 平面曲面アプローチ
@@ -96,16 +96,19 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=0.5, mode='gaussian', seed=42)
+    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=3.0, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=40, k=6)
+    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=60, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=2.0, seed=42)
+
+    # OP. 頂点順序攻撃（座標と点数を変えず、配列順序だけをランダム化）
+    # xyz_after = DW2F.vertex_reordering_attack(xyz_after, reorder_ratio=0.01, seed=42)
 
     # 6. 単多数決方式の抽出
     start = time.time()

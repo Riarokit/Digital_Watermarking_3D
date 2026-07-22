@@ -81,6 +81,9 @@ if __name__ == "__main__":
     # OP. ダウンサンプリング攻撃
     # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.0, seed=42)
 
+    # OP. 頂点順序攻撃（座標と点数を変えず、配列順序だけをランダム化）
+    # xyz_after = DW2F.vertex_reordering_attack(xyz_after, reorder_ratio=1.0, seed=42)
+
     # 5. 抽出処理
     start_extract = time.time()
     extracted_bits = DW1HU.extract_watermark_hu_mesh(

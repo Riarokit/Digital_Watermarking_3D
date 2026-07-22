@@ -16,8 +16,8 @@ import DW2_func as DW2F
 
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
-# INPUT_FILE = "C:/bun_zipper.ply"
-INPUT_FILE = "C:/dragon.ply"
+INPUT_FILE = "C:/bun_zipper.ply"
+# INPUT_FILE = "C:/dragon.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
@@ -39,11 +39,12 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [1.5, 2.0, 2.5]),
-    ("smoothing", [50, 60]),
+    # ("noise", [1.5, 2.0, 2.5]),
+    # ("smoothing", [50, 60]),
+    ("reordering", [0.25, 0.5, 0.75, 1.0]),
     # ("cropping", [0.6, 0.5, 0.4, 0.3, 0.2]),
-    ("downsampling", [0.5, 1.0, 1.5, 2.0]),
-    ("visual_quality", [None]),
+    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
+    # ("visual_quality", [None]),
 ]
 
 NOISE_MODE = "gaussian"
@@ -59,7 +60,7 @@ KNN_K = 6
 GRAPH_RADIUS = 0.03
 ORDER_CHECK_K = 6                 # 元点群で調べる近傍数
 ORDER_CHECK_EDGE_FACTOR = 10.0     # 攻撃後点間隔に対するアウト辺判定倍率
-ORDER_CHECK_MAX_BAD_RATIO = 0.25  # アウト辺を許容する最大割合
+ORDER_CHECK_MAX_BAD_RATIO = 0.005  # アウト辺を許容する最大割合
 ORDER_CHECK_MAX_SAMPLES = 20000   # 判定に使う最大頂点数
 MATCH_DISTANCE_FACTOR = 10.0       # 座標対応を許容する点間隔倍率
 FLATNESS_WEIGHTING = 0
@@ -120,6 +121,10 @@ def apply_attack(vertices, attack_type, parameter, seed):
             mode=DOWNSAMPLING_MODE,
             voxel_size_percent=parameter,
             seed=seed,
+        )
+    if attack_type == "reordering":
+        return DW2F.vertex_reordering_attack(
+            vertices, reorder_ratio=parameter, seed=seed
         )
     if attack_type == "visual_quality":
         return np.asarray(vertices).copy()
@@ -441,7 +446,7 @@ def attack_trial_count(attack_type):
     """乱数を使う攻撃のみ複数回試行し、決定論的攻撃の重複実行を避ける。"""
     if NUM_ATTACK_TRIALS < 1:
         raise ValueError("NUM_ATTACK_TRIALS must be at least 1.")
-    if attack_type == "noise":
+    if attack_type in {"noise", "reordering"}:
         return NUM_ATTACK_TRIALS
     if attack_type == "downsampling" and DOWNSAMPLING_MODE in {"random", "fps"}:
         return NUM_ATTACK_TRIALS
