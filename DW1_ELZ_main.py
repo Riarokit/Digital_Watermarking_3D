@@ -19,8 +19,8 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     triangles_after = triangles.copy()
 
     # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.5, mode="gaussian", seed=42)
+    xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=3.0, mode="gaussian", seed=42)
 
     # OP. スムージング攻撃
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.2, iterations=30, k=6)
@@ -107,7 +107,7 @@ if __name__ == "__main__":
         DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)
         # DW2F.visualize_embedded_points(xyz, xyz_after)
-    o3d.visualization.draw_geometries([pcd_after])
+    DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
 
     # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")
@@ -117,9 +117,7 @@ if __name__ == "__main__":
     if unknown_count:
         print(f"[ElZein] undecodable watermark bits: {unknown_count}")
     display_bits = np.where(np.asarray(extracted_bits) < 0, 0, extracted_bits)
-    DW2F.bitarray_to_image(
-        display_bits, n=n, save_path="elzein_recovered.bmp"
-    )
+    DW2F.bitarray_to_image(display_bits, n=n, save_path="elzein_recovered.bmp")
 
     # 8. 固有評価
     print("[ElZein] Portion 2-only / grouped redundant majority voting")

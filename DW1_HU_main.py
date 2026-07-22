@@ -111,7 +111,7 @@ if __name__ == "__main__":
         DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)
         DW2F.visualize_embedded_points(xyz, xyz_after)
-    o3d.visualization.draw_geometries([pcd_after])
+    DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
 
     # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")

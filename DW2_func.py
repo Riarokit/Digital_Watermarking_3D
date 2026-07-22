@@ -208,6 +208,40 @@ def visualize_mesh_with_highlighted_vertices(
     visualizer.run()
     visualizer.destroy_window()
 
+
+def visualize_triangle_mesh(
+    vertices,
+    triangles,
+    mesh_color=(0.35, 0.65, 0.95),
+    show_wireframe=False,
+    window_name="Triangle mesh",
+):
+    """Display vertices and triangle indices as a shaded triangle mesh."""
+    vertices = np.asarray(vertices, dtype=np.float64)
+    triangles = np.asarray(triangles, dtype=np.int32)
+
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) == 0:
+        raise ValueError("vertices must have non-empty shape (N, 3).")
+    if triangles.ndim != 2 or triangles.shape[1] != 3 or len(triangles) == 0:
+        raise ValueError("triangles must have non-empty shape (M, 3).")
+    if np.any(triangles < 0) or np.any(triangles >= len(vertices)):
+        raise ValueError("triangles contains an out-of-range vertex index.")
+
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(vertices)
+    mesh.triangles = o3d.utility.Vector3iVector(triangles)
+    mesh.compute_vertex_normals()
+    mesh.paint_uniform_color(mesh_color)
+
+    visualizer = o3d.visualization.Visualizer()
+    visualizer.create_window(window_name=window_name, width=1280, height=900)
+    visualizer.add_geometry(mesh)
+    render_option = visualizer.get_render_option()
+    render_option.mesh_show_wireframe = show_wireframe
+    render_option.mesh_show_back_face = True
+    visualizer.run()
+    visualizer.destroy_window()
+
 # =========================================================
 #  評価関数群
 # =========================================================

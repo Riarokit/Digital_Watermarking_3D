@@ -40,10 +40,10 @@ COMPARED_METHODS = [
 
 EXPERIMENTS = [
     ("noise", [1.0, 2.0, 3.0]),
-    ("smoothing", [20, 40, 60]),
-    ("reordering", [0.1, 0.5, 1.0]),
-    ("cropping", [0.7, 0.5, 0.3]),
-    ("downsampling", [1.0, 1.5, 2.0]),
+    # ("smoothing", [20, 40, 60]),
+    # ("reordering", [0.1, 0.5, 1.0]),
+    # ("cropping", [0.3, 0.5, 0.7]),
+    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
     # ("visual_quality", [None]),
 ]
 
@@ -59,10 +59,10 @@ GRAPH_MODE = "knn"
 KNN_K = 6
 GRAPH_RADIUS = 0.03
 ORDER_CHECK_K = 6                 # 元点群で調べる近傍数
-ORDER_CHECK_EDGE_FACTOR = 10.0     # 攻撃後点間隔に対するアウト辺判定倍率
-ORDER_CHECK_MAX_BAD_RATIO = 0.005  # アウト辺を許容する最大割合
+ORDER_CHECK_EDGE_FACTOR = 20.0     # 攻撃後点間隔に対するアウト辺判定倍率
+ORDER_CHECK_MAX_BAD_RATIO = 0.01  # アウト辺を許容する最大割合
 ORDER_CHECK_MAX_SAMPLES = 20000   # 判定に使う最大頂点数
-MATCH_DISTANCE_FACTOR = 10.0       # 座標対応を許容する点間隔倍率
+MATCH_DISTANCE_FACTOR = 20.0       # 座標対応を許容する点間隔倍率
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
