@@ -33,10 +33,10 @@ if __name__ == "__main__":
     radius = 0.03
     # 同数点群で頂点順序が維持されているかを判定する設定
     order_check_k = 6                 # 元点群で調べる近傍数
-    order_check_edge_factor = 8.0     # 攻撃後点間隔に対する長辺判定倍率
-    order_check_max_bad_ratio = 0.25  # 長辺を許容する最大割合
+    order_check_edge_factor = 10.0     # 攻撃後点間隔に対するアウト辺判定倍率
+    order_check_max_bad_ratio = 0.25  # アウト辺を許容する最大割合
     order_check_max_samples = 20000   # 判定に使う最大頂点数
-    match_distance_factor = 8.0       # 座標対応を許容する点間隔倍率
+    match_distance_factor = 10.0       # 座標対応を許容する点間隔倍率
     # 平面曲面アプローチ
     flatness_weighting = 0
 

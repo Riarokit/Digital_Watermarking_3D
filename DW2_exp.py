@@ -16,8 +16,8 @@ import DW2_func as DW2F
 
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
-INPUT_FILE = "C:/bun_zipper.ply"
-# INPUT_FILE = "C:/dragon.ply"
+# INPUT_FILE = "C:/bun_zipper.ply"
+INPUT_FILE = "C:/dragon.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
@@ -39,9 +39,9 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [0.5, 1.0, 1.5, 2.0, 2.5]),
-    ("smoothing", [20, 30, 40, 50, 60]),
-    ("cropping", [0.6, 0.5, 0.4, 0.3, 0.2]),
+    ("noise", [1.5, 2.0, 2.5]),
+    ("smoothing", [50, 60]),
+    # ("cropping", [0.6, 0.5, 0.4, 0.3, 0.2]),
     ("downsampling", [0.5, 1.0, 1.5, 2.0]),
     ("visual_quality", [None]),
 ]
@@ -58,10 +58,10 @@ GRAPH_MODE = "knn"
 KNN_K = 6
 GRAPH_RADIUS = 0.03
 ORDER_CHECK_K = 6                 # 元点群で調べる近傍数
-ORDER_CHECK_EDGE_FACTOR = 8.0     # 攻撃後点間隔に対する長辺判定倍率
-ORDER_CHECK_MAX_BAD_RATIO = 0.25  # 長辺を許容する最大割合
+ORDER_CHECK_EDGE_FACTOR = 10.0     # 攻撃後点間隔に対するアウト辺判定倍率
+ORDER_CHECK_MAX_BAD_RATIO = 0.25  # アウト辺を許容する最大割合
 ORDER_CHECK_MAX_SAMPLES = 20000   # 判定に使う最大頂点数
-MATCH_DISTANCE_FACTOR = 8.0       # 座標対応を許容する点間隔倍率
+MATCH_DISTANCE_FACTOR = 10.0       # 座標対応を許容する点間隔倍率
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
