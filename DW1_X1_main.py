@@ -39,6 +39,8 @@ if __name__ == "__main__":
     match_distance_factor = 20.0       # 座標対応を許容する点間隔倍率
     # 平面曲面アプローチ
     flatness_weighting = 0
+    # 点群可視化
+    show = True
 
     # Bunny全周波用
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
@@ -68,6 +70,8 @@ if __name__ == "__main__":
     pcd_before = DW2F.add_colors(pcd_before, color="grad")
     xyz = np.asarray(pcd_before.points)
     colors = np.asarray(pcd_before.colors)
+    if show:
+        o3d.visualization.draw_geometries([pcd_before])
 
     # 3. 埋め込みビット生成
     watermark_bits = DW2F.image_to_bitarray(image_path, n=n)
@@ -99,7 +103,7 @@ if __name__ == "__main__":
     xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=2.0, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=60, k=6)
+    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=50, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
@@ -133,11 +137,14 @@ if __name__ == "__main__":
     if len(xyz_after) == len(xyz):
         DW2F.evaluate_psnr(pcd_before, pcd_after, by_index=True)
         # DW2F.evaluate_pc_msdm(pcd_before, pcd_after)
-        DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
         DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)
+        if not show:
+            DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
+    if show:
         # DW2F.visualize_embedded_points(xyz, xyz_after)
-    o3d.visualization.draw_geometries([pcd_after])
+        pcd_after = DW2F.add_colors(pcd_after, color="grad")
+        o3d.visualization.draw_geometries([pcd_after])
 
     # 8. ロバスト性評価
     print(f"埋込ビット：{len(watermark_bits)}")

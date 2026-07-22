@@ -15,7 +15,7 @@ if __name__ == "__main__":
     a = 2.53e-3  # Bunny用
     # a = 3.56e-3  # Dragon用
     # a = 3.21e-3  # Armadillo用
-    show_input_mesh = False
+    show = False
 
     # 1. データ取得
     image_path = "watermark16.bmp"
@@ -29,16 +29,10 @@ if __name__ == "__main__":
     # 2. 前処理
     raw_vertices = np.asarray(mesh_before.vertices)
     raw_triangles = np.asarray(mesh_before.triangles)
-    isolated_indices = DW2F.find_unreferenced_vertex_indices(
-        raw_vertices, raw_triangles
-    )
-    if show_input_mesh:
-        DW2F.visualize_mesh_with_highlighted_vertices(
-            mesh_before, highlighted_indices=isolated_indices
-        )
-    xyz, triangles, _ = DW2F.remove_unreferenced_vertices(
-        raw_vertices, raw_triangles
-    )
+    isolated_indices = DW2F.find_unreferenced_vertex_indices(raw_vertices, raw_triangles)
+    if show:
+        DW2F.visualize_mesh_with_highlighted_vertices(mesh_before, highlighted_indices=isolated_indices)
+    xyz, triangles, _ = DW2F.remove_unreferenced_vertices(raw_vertices, raw_triangles)
     pcd_before = o3d.geometry.PointCloud()
     pcd_before.points = o3d.utility.Vector3dVector(xyz)
     pcd_before = DW2F.normalize_point_cloud(pcd_before)
@@ -107,7 +101,10 @@ if __name__ == "__main__":
         DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)
         # DW2F.visualize_embedded_points(xyz, xyz_after)
-    DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
+    if show:
+        DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
+        o3d.visualization.draw_geometries([pcd_after])
+        
 
     # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")

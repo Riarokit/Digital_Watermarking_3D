@@ -21,7 +21,7 @@ if __name__ == "__main__":
     fide_p = 53.4
     # 円状埋め込み回数 (論文推奨: 25 [Source 9: Sect 5.1.3])
     T_rep = 25
-    show_input_mesh = False  # True にすると、青い面と赤い未参照頂点を表示する
+    show = False
     
     # ======================
     # 1. データ取得
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     raw_vertices = np.asarray(mesh_before.vertices)
     raw_triangles = np.asarray(mesh_before.triangles)
     isolated_indices = DW2F.find_unreferenced_vertex_indices(raw_vertices, raw_triangles)
-    if show_input_mesh:
+    if show:
         DW2F.visualize_mesh_with_highlighted_vertices(mesh_before, highlighted_indices=isolated_indices)
     xyz, triangles, _ = DW2F.remove_unreferenced_vertices(
         raw_vertices, raw_triangles
@@ -111,7 +111,9 @@ if __name__ == "__main__":
         DW2F.evaluate_p2d(pcd_before, pcd_after)
         DW2F.evaluate_point_ssim(pcd_before, pcd_after)
         DW2F.visualize_embedded_points(xyz, xyz_after)
-    DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
+    if show:
+        DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
+        o3d.visualization.draw_geometries([pcd_after])
 
     # 7. ロバスト性評価
     print(f"埋込ビット長：{len(watermark_bits)}")
