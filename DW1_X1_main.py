@@ -29,7 +29,7 @@ if __name__ == "__main__":
     cluster_point = 2000
     # グラフ構築モード
     graph_mode = 'knn'
-    k = 12
+    k = 24
     radius = 0.03
     # 同数点群で頂点順序が維持されているかを判定する設定
     order_check_k = 6                 # 元点群で調べる近傍数
@@ -103,7 +103,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=3.0, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=1.0, iterations=100, k=6)
+    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.5, iterations=50, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
