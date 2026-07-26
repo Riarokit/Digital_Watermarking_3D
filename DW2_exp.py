@@ -32,8 +32,8 @@ VERBOSE_TRIAL_LOGS = False
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    # "ElZein",
-    # "Hu",
+    "ElZein",
+    "Hu",
     # "Verma",
     "Proposed",
 ]
@@ -263,7 +263,7 @@ def embed_proposed(vertices, labels, bits, min_spectrum, max_spectrum, beta):
 
 
 def visual_quality_scores(original, marked):
-    """いずれも高いほど高品質となる実装上のスコアを返す。"""
+    """PC-MSDMは低いほど、それ以外の指標は高いほど高品質となる。"""
     before = point_cloud(original)
     after = point_cloud(marked)
     return {
@@ -591,15 +591,25 @@ def print_robustness_table(
 
 def print_visual_quality_table(results, method_variants):
     metrics = ("PC-MSDM", "AngularSimilarity", "P2D", "PointSSIM")
-    print("\nVisual quality without attack (higher is better)")
-    print(" | ".join(f"{value:<20}" for value in ("Method", *metrics)))
-    print("-" * 115)
+    metric_labels = (
+        "PC-MSDM (lower)",
+        "AngularSimilarity (higher)",
+        "P2D (higher)",
+        "PointSSIM (higher)",
+    )
+    print("\nVisual quality without attack")
+    print(
+        " | ".join(
+            f"{value:<26}" for value in ("Method", *metric_labels)
+        )
+    )
+    print("-" * (29 * (len(metric_labels) + 1)))
     for name, scores in results.items():
         values = [
             result_method_label(name, method_variants),
             *(f"{scores[metric]:.4f}" for metric in metrics),
         ]
-        print(" | ".join(f"{value:<20}" for value in values))
+        print(" | ".join(f"{value:<26}" for value in values))
 
 
 def prepare_method_variants(vertices, triangles, bits, target_mse):

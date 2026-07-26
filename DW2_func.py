@@ -442,7 +442,9 @@ def extract_surface_info(xyz, k=6):
             coeffs[i] = theta
             
             a, b, c, d, e, f_coeff = theta
-            num = (1 + d**2)*a + (1 + e**2)*b - c*d*e
+            # z=f(x,y)の平均曲率。f_x=d, f_y=e, f_xx=2a,
+            # f_yy=2b, f_xy=c を代入した式と、投影点側の計算を一致させる。
+            num = (1 + e**2)*a + (1 + d**2)*b - c*d*e
             den = (1 + d**2 + e**2)**1.5
             curvatures[i] = np.abs(num / den)
             
@@ -554,15 +556,18 @@ def evaluate_pc_msdm(pcd_before, pcd_after, k=6, m=2, verbose=True):
     l_minkowski_d2r = np.mean(LD_dist_to_ref ** m) ** (1.0 / m)
     l_minkowski_r2d = np.mean(LD_ref_to_dist ** m) ** (1.0 / m)
     
-    # 対称的なMSDMの歪みスコア
+    # 対称的なPC-MSDM歪みスコア
     symmetric_distortion = (l_minkowski_d2r + l_minkowski_r2d) / 2.0
-    
-    # 品質スコア（1.0に近いほど高評価）として返す
-    final_score = np.clip(1.0 - symmetric_distortion, 0.0, 1.0)
-    
+
+    # 原論文どおり、0が同一、1に近いほど歪みが大きい値として返す。
+    distortion_score = float(np.clip(symmetric_distortion, 0.0, 1.0))
+
     if verbose:
-        print(f"PC-MSDM (k={k}, p={m}): {final_score:.4f}")
-    return final_score
+        print(
+            f"PC-MSDM distortion (lower is better, k={k}, p={m}): "
+            f"{distortion_score:.4f}"
+        )
+    return distortion_score
 
 def evaluate_angular_similarity(pcd_before, pcd_after, k_normals=4, verbose=True):
     """
