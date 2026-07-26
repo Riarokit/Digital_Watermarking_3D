@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Tested with the NVIDIA GeForce RTX 2080 in this project environment.
+cupy-cuda12x==13.4.1

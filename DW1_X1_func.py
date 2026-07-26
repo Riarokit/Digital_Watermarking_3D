@@ -6,8 +6,36 @@ import DW2_func as DW2F
 from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbors_graph
 try:
     import cupy as cp
-except ImportError:
+except ImportError as exc:
     cp = None
+    _CUPY_IMPORT_ERROR = exc
+else:
+    _CUPY_IMPORT_ERROR = None
+
+
+def _detect_gft_gpu():
+    """CuPyが利用可能なCUDAデバイス上で実行できるか判定する。"""
+    if cp is None:
+        return False, "CuPyがインストールされていません"
+    try:
+        if not cp.is_available():
+            return False, "CuPyが利用可能なCUDAデバイスを検出できませんでした"
+        device_id = int(cp.cuda.runtime.getDevice())
+        properties = cp.cuda.runtime.getDeviceProperties(device_id)
+        device_name = properties["name"]
+        if isinstance(device_name, bytes):
+            device_name = device_name.decode(errors="replace")
+        # 最初の大規模なクラスタ固有値分解を行う前に、最小限のGPUメモリを
+        # 確保し、CUDAランタイムやドライバの不足を検出する。
+        cp.asarray([0.0])
+        cp.cuda.Stream.null.synchronize()
+        return True, f"CUDAデバイス {device_id}: {device_name}"
+    except Exception as exc:
+        return False, f"CuPy/CUDAの初期化に失敗しました: {exc}"
+
+
+_GFT_GPU_AVAILABLE, _GFT_BACKEND_DETAIL = _detect_gft_gpu()
+_GFT_BACKEND_REPORTED = False
 
 # =========================================================
 #  クラスタリング関数群
@@ -436,6 +464,8 @@ def gft_basis(W):
     return eigvecs, eigvals
 
 def gft_basis_gpu(W):
+    if not _GFT_GPU_AVAILABLE:
+        raise RuntimeError(_GFT_BACKEND_DETAIL)
     # 入力Wはnumpy配列（CPU）、ここでGPUに転送
     W_gpu = cp.asarray(W)
     D_gpu = cp.diag(W_gpu.sum(axis=1))
@@ -445,6 +475,83 @@ def gft_basis_gpu(W):
     eigvals = cp.asnumpy(eigvals_gpu)
     eigvecs = cp.asnumpy(eigvecs_gpu)
     return eigvecs, eigvals
+
+
+def gft_basis_auto(W):
+    """CUDAが利用可能な場合はGPUでGFT基底の固有値分解を行う。"""
+    global _GFT_BACKEND_REPORTED
+    if not _GFT_BACKEND_REPORTED:
+        backend = "GPU" if _GFT_GPU_AVAILABLE else "CPU"
+        print(f"[GFT] 基底計算バックエンド: {backend} ({_GFT_BACKEND_DETAIL})")
+        _GFT_BACKEND_REPORTED = True
+    if _GFT_GPU_AVAILABLE:
+        return gft_basis_gpu(W)
+    return gft_basis(W)
+
+
+def gft_analyze_signals_auto(W, signals):
+    """固有基底をGPU上に保持したまま、1つ以上の信号のGFT係数を計算する。"""
+    signals = np.asarray(signals, dtype=np.float64)
+    was_vector = signals.ndim == 1
+    if was_vector:
+        signals = signals[:, None]
+    if signals.ndim != 2 or signals.shape[0] != len(W):
+        raise ValueError("signalsの形状は(N,)または(N, K)である必要があります。")
+
+    global _GFT_BACKEND_REPORTED
+    if not _GFT_BACKEND_REPORTED:
+        backend = "GPU" if _GFT_GPU_AVAILABLE else "CPU"
+        print(f"[GFT] 基底計算バックエンド: {backend} ({_GFT_BACKEND_DETAIL})")
+        _GFT_BACKEND_REPORTED = True
+
+    if _GFT_GPU_AVAILABLE:
+        W_gpu = cp.asarray(W)
+        laplacian_gpu = cp.diag(W_gpu.sum(axis=1)) - W_gpu
+        eigvals_gpu, basis_gpu = cp.linalg.eigh(laplacian_gpu)
+        coefficients_gpu = basis_gpu.T @ cp.asarray(signals)
+        eigvals = cp.asnumpy(eigvals_gpu)
+        coefficients = cp.asnumpy(coefficients_gpu)
+    else:
+        degree = np.diag(W.sum(axis=1))
+        eigvals, basis = np.linalg.eigh(degree - W)
+        coefficients = basis.T @ signals
+
+    if was_vector:
+        coefficients = coefficients[:, 0]
+    return coefficients, eigvals
+
+
+def gft_synthesize_changes_auto(W, coefficient_changes):
+    """固有基底を返さずに、1つ以上のスペクトル変化を逆GFTする。"""
+    coefficient_changes = np.asarray(coefficient_changes, dtype=np.float64)
+    was_vector = coefficient_changes.ndim == 1
+    if was_vector:
+        coefficient_changes = coefficient_changes[:, None]
+    if coefficient_changes.ndim != 2 or coefficient_changes.shape[0] != len(W):
+        raise ValueError(
+            "coefficient_changesの形状は(N,)または(N, K)である必要があります。"
+        )
+
+    global _GFT_BACKEND_REPORTED
+    if not _GFT_BACKEND_REPORTED:
+        backend = "GPU" if _GFT_GPU_AVAILABLE else "CPU"
+        print(f"[GFT] 基底計算バックエンド: {backend} ({_GFT_BACKEND_DETAIL})")
+        _GFT_BACKEND_REPORTED = True
+
+    if _GFT_GPU_AVAILABLE:
+        W_gpu = cp.asarray(W)
+        laplacian_gpu = cp.diag(W_gpu.sum(axis=1)) - W_gpu
+        _, basis_gpu = cp.linalg.eigh(laplacian_gpu)
+        changes = cp.asnumpy(basis_gpu @ cp.asarray(coefficient_changes))
+    else:
+        degree = np.diag(W.sum(axis=1))
+        _, basis = np.linalg.eigh(degree - W)
+        changes = basis @ coefficient_changes
+
+    if was_vector:
+        changes = changes[:, 0]
+    return changes
+
 
 def gft(signal, basis):
     return basis.T @ signal
@@ -465,6 +572,94 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
     elif len(rep) > total_length:
         rep = rep[:total_length]
     return rep
+
+
+def prepare_watermark_x1_band_displacements(
+    xyz,
+    labels,
+    embed_bits,
+    bands,
+    graph_mode='knn',
+    k=10,
+    radius=0.05,
+    flatness_weighting=0,
+    k_neighbors=20,
+    skip_threshold_mode="half",
+):
+    """複数のGFT周波数帯について、beta=1の座標変位を一括計算する。
+
+    ``bands``には``(名前, 最小周波数, 最大周波数)``のタプルを渡す。
+    各クラスタのグラフを一度だけ固有値分解し、指定された全周波数帯の変位を
+    同時に生成する。得られた変位は、グラフ構築や固有値分解をやり直さず、
+    任意のbetaに比例させて利用できる。
+    """
+    xyz = np.asarray(xyz, dtype=np.float64)
+    labels = np.asarray(labels)
+    embed_bits = list(embed_bits)
+    band_specs = list(bands)
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError("xyzの形状は(N, 3)である必要があります。")
+    if labels.shape != (len(xyz),):
+        raise ValueError("labelsの形状は(N,)である必要があります。")
+    if not embed_bits:
+        return {name: np.zeros_like(xyz) for name, _, _ in band_specs}
+    if not band_specs:
+        return {}
+
+    names = [name for name, _, _ in band_specs]
+    if len(set(names)) != len(names):
+        raise ValueError("周波数帯の名前は重複しないように指定してください。")
+    for name, minimum, maximum in band_specs:
+        if not 0.0 <= minimum <= maximum <= 1.0:
+            raise ValueError(
+                f"{name}: 周波数範囲は0 <= 最小値 <= 最大値 <= 1を"
+                "満たす必要があります。"
+            )
+
+    cluster_ids = np.unique(labels)
+    if flatness_weighting == 0:
+        weights = {cluster_id: 1.0 for cluster_id in cluster_ids}
+    else:
+        flatness = estimate_cluster_flatness(
+            xyz, labels, k_neighbors=k_neighbors
+        )
+        weights = compute_cluster_weights(flatness, flatness_weighting)
+    phi = float(np.max(np.ptp(xyz, axis=0)))
+    displacements = {name: np.zeros_like(xyz) for name in names}
+    skip_threshold = len(embed_bits) / 2 if skip_threshold_mode == "half" else -1
+
+    for cluster_id in cluster_ids:
+        indices = np.flatnonzero(labels == cluster_id)
+        if len(indices) <= skip_threshold:
+            continue
+        points = xyz[indices]
+        _, normal = compute_pseudoplane_pca(points)
+        graph = build_graph(points, graph_mode=graph_mode, k=k, radius=radius)
+
+        coefficient_changes = np.zeros((len(points), len(band_specs)))
+        cluster_weight = weights.get(cluster_id, 1.0)
+        for column, (_, minimum, maximum) in enumerate(band_specs):
+            start = int(len(points) * minimum)
+            end = int(len(points) * maximum)
+            count = max(end - start, 0)
+            if count == 0:
+                continue
+            repeat_count = count // len(embed_bits)
+            redundant = repeat_bits_blockwise(embed_bits, repeat_count, count)
+            signs = np.asarray(redundant, dtype=np.float64) * 2.0 - 1.0
+            coefficient_changes[start:end, column] = (
+                signs * cluster_weight * phi
+            )
+
+        height_changes = gft_synthesize_changes_auto(
+            graph, coefficient_changes
+        )
+        for column, name in enumerate(names):
+            displacements[name][indices] = (
+                height_changes[:, column, None] * normal[None, :]
+            )
+
+    return displacements
 
 def embed_watermark_x1(
     xyz: np.ndarray,
@@ -499,8 +694,13 @@ def embed_watermark_x1(
     # )
 
     # 既存のクラスタ平坦度 -> 重み
-    flatness_dict = estimate_cluster_flatness(xyz, labels, k_neighbors=k_neighbors)
-    weights = compute_cluster_weights(flatness_dict, flatness_weighting)
+    if flatness_weighting == 0:
+        weights = {cluster_id: 1.0 for cluster_id in cluster_ids}
+    else:
+        flatness_dict = estimate_cluster_flatness(
+            xyz, labels, k_neighbors=k_neighbors
+        )
+        weights = compute_cluster_weights(flatness_dict, flatness_weighting)
 
     # 既存コードと同じスケール（phi）
     phi = max(
@@ -533,10 +733,7 @@ def embed_watermark_x1(
 
         # グラフ構築
         W = build_graph(pts, graph_mode=graph_mode, k=k, radius=radius)
-        if cp is not None:
-            basis, eigvals = gft_basis_gpu(W)
-        else:
-            basis, eigvals = gft_basis(W)
+        basis, eigvals = gft_basis_auto(W)
 
         # 高さ信号をGFT
         gft_coeffs = gft(h, basis)
@@ -695,15 +892,15 @@ def extract_watermark_x1(
     labels: np.ndarray,
     embed_bits_length: int,
     graph_mode: str = 'knn',
-    k: int = 10,
+    k: int = 12,
     radius: float = 0.05,
     min_spectre: float = 0.0,
     max_spectre: float = 1.0,
     skip_threshold_mode: str = "half",  # "half" or "none"
-    match_distance_factor: float = 8.0,
+    match_distance_factor: float = 30.0,
     order_check_k: int = 6,
-    order_check_edge_factor: float = 8.0,
-    order_check_max_bad_ratio: float = 0.25,
+    order_check_edge_factor: float = 30.0,
+    order_check_max_bad_ratio: float = 0.01,
     order_check_max_samples: int = 20000,
 ):
     """
@@ -776,13 +973,11 @@ def extract_watermark_x1(
 
         # グラフはorigで
         W = build_graph(pts_orig, graph_mode=graph_mode, k=k, radius=radius)
-        if cp is not None:
-            basis, eigvals = gft_basis_gpu(W)
-        else:
-            basis, eigvals = gft_basis(W)
-
-        gft_orig = gft(h_orig, basis)
-        gft_emb = gft(h_emb, basis)
+        coefficients, eigvals = gft_analyze_signals_auto(
+            W, np.column_stack((h_orig, h_emb))
+        )
+        gft_orig = coefficients[:, 0]
+        gft_emb = coefficients[:, 1]
 
         Q_ = len(gft_emb)
         q_start = int(Q_ * min_spectre)

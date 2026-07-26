@@ -216,16 +216,16 @@ def visualize_triangle_mesh(
     show_wireframe=False,
     window_name="Triangle mesh",
 ):
-    """Display vertices and triangle indices as a shaded triangle mesh."""
+    """頂点座標と三角形インデックスから陰影付きメッシュを表示する。"""
     vertices = np.asarray(vertices, dtype=np.float64)
     triangles = np.asarray(triangles, dtype=np.int32)
 
     if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) == 0:
-        raise ValueError("vertices must have non-empty shape (N, 3).")
+        raise ValueError("verticesの形状は空でない(N, 3)である必要があります。")
     if triangles.ndim != 2 or triangles.shape[1] != 3 or len(triangles) == 0:
-        raise ValueError("triangles must have non-empty shape (M, 3).")
+        raise ValueError("trianglesの形状は空でない(M, 3)である必要があります。")
     if np.any(triangles < 0) or np.any(triangles >= len(vertices)):
-        raise ValueError("triangles contains an out-of-range vertex index.")
+        raise ValueError("trianglesに範囲外の頂点インデックスが含まれています。")
 
     mesh = o3d.geometry.TriangleMesh()
     mesh.vertices = o3d.utility.Vector3dVector(vertices)

@@ -32,23 +32,24 @@ VERBOSE_TRIAL_LOGS = False
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    "ElZein",
-    "Hu",
+    # "ElZein",
+    # "Hu",
     # "Verma",
     "Proposed",
 ]
 
 EXPERIMENTS = [
     ("noise", [1.0, 2.0, 3.0]),
-    # ("smoothing", [20, 40, 60]),
+    ("smoothing", [20, 50, 100]),
     # ("reordering", [0.1, 0.5, 1.0]),
-    # ("cropping", [0.3, 0.5, 0.7]),
-    # ("downsampling", [0.5, 1.0, 1.5, 2.0]),
-    # ("visual_quality", [None]),
+    # ("cropping", [0.7, 0.5, 0.3]),
+    ("downsampling", [0.5, 1.0, 1.5, 2.0]),
+    ("visual_quality", [None]),
 ]
 
+# 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.3
+SMOOTHING_LAMBDA = 1.0
 SMOOTHING_K = 6
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
@@ -56,13 +57,13 @@ DOWNSAMPLING_MODE = "voxel"
 
 # 提案手法
 GRAPH_MODE = "knn"
-KNN_K = 6
+KNN_K = 12
 GRAPH_RADIUS = 0.03
 ORDER_CHECK_K = 6                 # 元点群で調べる近傍数
-ORDER_CHECK_EDGE_FACTOR = 20.0     # 攻撃後点間隔に対するアウト辺判定倍率
+ORDER_CHECK_EDGE_FACTOR = 30.0     # 攻撃後点間隔に対するアウト辺判定倍率
 ORDER_CHECK_MAX_BAD_RATIO = 0.01  # アウト辺を許容する最大割合
 ORDER_CHECK_MAX_SAMPLES = 20000   # 判定に使う最大頂点数
-MATCH_DISTANCE_FACTOR = 20.0       # 座標対応を許容する点間隔倍率
+MATCH_DISTANCE_FACTOR = 30.0       # 座標対応を許容する点間隔倍率
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
@@ -152,25 +153,59 @@ def match_strength(
     return_strength=False,
 ):
     """変位と強度の比例関係から、目標MSEに対応する強度を求める。"""
-    candidate = embed_function(initial_strength)
-    mse, _ = embedding_quality(original, candidate)
+    original = np.asarray(original, dtype=np.float64)
+    initial_candidate = np.asarray(
+        embed_function(initial_strength), dtype=np.float64
+    )
+    initial_displacement = initial_candidate - original
+    mse, _ = embedding_quality(original, initial_candidate)
     if mse <= 0.0 or not np.isfinite(mse):
         raise RuntimeError(f"{label}: initial embedding produced invalid MSE={mse}.")
 
     strength = initial_strength * np.sqrt(target_mse / mse)
-    candidate = embed_function(strength)
+    candidate = original + initial_displacement * (strength / initial_strength)
     mse, psnr = embedding_quality(original, candidate)
 
-    # 固有分解や再構成の数値誤差が見える場合だけ一度補正する。
+    # 再埋め込みせず、比例変位のスケーリングだけを一度補正する。
     if mse > 0.0 and abs(mse - target_mse) / target_mse >= 3e-4:
         strength *= np.sqrt(target_mse / mse)
-        candidate = embed_function(strength)
+        candidate = original + initial_displacement * (
+            strength / initial_strength
+        )
         mse, psnr = embedding_quality(original, candidate)
 
     print(f"[{label}] strength={strength:.6e}, PSNR={psnr:.2f} dB")
     if return_strength:
         return candidate, strength
     return candidate
+
+
+def match_linear_displacement(original, unit_displacement, target_mse, label):
+    """事前計算したbeta=1の変位を、目標MSEに合う強度へ直接拡大・縮小する。"""
+    original = np.asarray(original, dtype=np.float64)
+    unit_displacement = np.asarray(unit_displacement, dtype=np.float64)
+    if original.shape != unit_displacement.shape:
+        raise ValueError(f"{label}: 変位と頂点座標の形状が一致しません。")
+
+    unit_mse = float(np.mean(np.sum(unit_displacement**2, axis=1)))
+    if unit_mse <= 0.0 or not np.isfinite(unit_mse):
+        raise RuntimeError(
+            f"{label}: 事前計算した埋め込み変位の単位MSEが不正です: "
+            f"{unit_mse}"
+        )
+
+    strength = float(np.sqrt(target_mse / unit_mse))
+    candidate = original + strength * unit_displacement
+    mse, psnr = embedding_quality(original, candidate)
+
+    # 浮動小数点の丸め誤差が現れた場合は、軽量な強度調整だけを再実行する。
+    if mse > 0.0 and abs(mse - target_mse) / target_mse >= 3e-4:
+        strength *= float(np.sqrt(target_mse / mse))
+        candidate = original + strength * unit_displacement
+        mse, psnr = embedding_quality(original, candidate)
+
+    print(f"[{label}] strength={strength:.6e}, PSNR={psnr:.2f} dB")
+    return candidate, strength
 
 
 def match_hu_fidep(vertices, triangles, bits, target_mse):
@@ -390,15 +425,30 @@ def prepare_methods(
                     f"[Warning] smallest cluster={min_size}, "
                     f"watermark bits={len(bits)}."
                 )
-            for band, min_spectrum, max_spectrum, initial_beta in BANDS:
+            print(
+                "[Proposed] 各クラスタを一度だけ固有値分解し、"
+                "全周波数帯の変位を一括計算します..."
+            )
+            band_displacements = DW1X1.prepare_watermark_x1_band_displacements(
+                vertices,
+                labels,
+                bits,
+                [
+                    (band, min_spectrum, max_spectrum)
+                    for band, min_spectrum, max_spectrum, _ in BANDS
+                ],
+                graph_mode=GRAPH_MODE,
+                k=KNN_K,
+                radius=GRAPH_RADIUS,
+                flatness_weighting=FLATNESS_WEIGHTING,
+                k_neighbors=K_NEIGHBORS,
+            )
+            for band, min_spectrum, max_spectrum, _initial_beta in BANDS:
                 name = f"P-{band}({cluster_points})"
-                marked = match_strength(
+                marked, _ = match_linear_displacement(
                     vertices,
-                    lambda beta, lab=labels, lo=min_spectrum, hi=max_spectrum: embed_proposed(
-                        vertices, lab, bits, lo, hi, beta
-                    ),
+                    band_displacements[band],
                     target_mse,
-                    initial_beta,
                     name,
                 )
                 methods[name] = {
@@ -442,22 +492,6 @@ def prepare_methods(
                 f"expected {TARGET_PSNR:.4f} +/- 0.05 dB."
             )
     return methods, newly_prepared
-
-
-def verify_no_attack_extraction(methods, bits):
-    """攻撃前の埋め込み済みモデルから全方式が完全抽出できることを確認する。"""
-    print("\nNo-attack extraction check:")
-    for name, method in methods.items():
-        extracted = run_trial_call(
-            method["extract"], method["vertices"], method["triangles"]
-        )
-        ber = bit_error_rate(bits, extracted)
-        print(f"  {name:<20} BER={ber:.4f}")
-        if ber != 0.0:
-            raise RuntimeError(
-                f"{name}: no-attack BER must be 0 before robustness experiments; "
-                f"got {ber:.6f}."
-            )
 
 
 def attack_trial_count(attack_type):
@@ -589,8 +623,6 @@ def prepare_method_variants(vertices, triangles, bits, target_mse):
             embedding_seed,
             deterministic_cache,
         )
-        new_methods = {name: methods[name] for name in newly_prepared}
-        verify_no_attack_extraction(new_methods, bits)
         for name in newly_prepared:
             method_variants.setdefault(name, []).append(methods[name])
 

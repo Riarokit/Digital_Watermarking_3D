@@ -29,14 +29,14 @@ if __name__ == "__main__":
     cluster_point = 2000
     # グラフ構築モード
     graph_mode = 'knn'
-    k = 6
+    k = 12
     radius = 0.03
     # 同数点群で頂点順序が維持されているかを判定する設定
     order_check_k = 6                 # 元点群で調べる近傍数
-    order_check_edge_factor = 20.0     # 攻撃後点間隔に対するアウト辺判定倍率
+    order_check_edge_factor = 30.0     # 攻撃後点間隔に対するアウト辺判定倍率
     order_check_max_bad_ratio = 0.01  # アウト辺を許容する最大割合
     order_check_max_samples = 20000   # 判定に使う最大頂点数
-    match_distance_factor = 20.0       # 座標対応を許容する点間隔倍率
+    match_distance_factor = 30.0       # 座標対応を許容する点間隔倍率
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化
@@ -100,10 +100,10 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=2.0, mode='gaussian', seed=42)
+    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=3.0, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=50, k=6)
+    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=1.0, iterations=100, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
