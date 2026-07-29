@@ -16,8 +16,8 @@ import DW2_func as DW2F
 
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
-INPUT_FILE = "C:/bun_zipper.ply"
-# INPUT_FILE = "C:/dragon.ply"
+# INPUT_FILE = "C:/bun_zipper.ply"
+INPUT_FILE = "C:/dragon.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16

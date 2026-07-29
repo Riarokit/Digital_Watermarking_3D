@@ -488,7 +488,8 @@ def extract_watermark_hu_mesh(vertices, triangles, key_info):
     )
     # 式 (13): T 枚を画素ごとに多数決する。
     # Missing carriers cast no vote. No surviving vote and an exact tie are
-    # represented as -1 so BER evaluation counts an undecodable bit as an error.
+    # represented as -1 so BER evaluation assigns an undecodable bit an error
+    # contribution of 0.5.
     known_signal = (vote_count > 0) & (2 * one_count != vote_count)
     recovered_signal = (2 * one_count > vote_count).astype(np.uint8)
     recovered = hilbert_signal_to_watermark(

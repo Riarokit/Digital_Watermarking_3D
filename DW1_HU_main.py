@@ -18,16 +18,16 @@ if __name__ == "__main__":
     # 埋め込みに用いる画像サイズ n×n (論文では32x32 [Source 9: Sect 5])
     n = 16
     # フィデリティパラメータ (論文推奨: 115 [Source 9: Sect 5.1.2])
-    fide_p = 53.4
+    fide_p = 52.5
     # 円状埋め込み回数 (論文推奨: 25 [Source 9: Sect 5.1.3])
     T_rep = 25
-    show = False
+    show = True
     
     # ======================
     # 1. データ取得
     image_path = "watermark16.bmp"
-    input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon.ply"
+    # input_file = "C:/bun_zipper.ply"
+    input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:

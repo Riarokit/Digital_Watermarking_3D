@@ -382,8 +382,14 @@ def evaluate_robustness(watermark_bits, extracted_bits, verbose=True):
         raise ValueError("extracted_bits must contain only -1, 0 and 1.")
 
     # --- BER計算 ---
-    # 単純な一致率から計算
-    ber = 1.0 - np.mean(w == w_)
+    # 抽出不可（-1）は二値判定の情報を持たないため、ランダムな二値推定の
+    # 期待誤り率に相当する0.5ビット誤りとして扱う。
+    known = w_ != -1
+    wrong = known & (w != w_)
+    ber = (
+        np.count_nonzero(wrong)
+        + 0.5 * np.count_nonzero(~known)
+    ) / w.size
 
     # --- Corr計算 (論文の式5: ピアソン相関係数) ---
     # np.corrcoef は相関行列を返すので [0, 1] 成分を取得
