@@ -6,6 +6,7 @@ FCMのmoderateクラスタに属する全キャリアをビットごとのグル
 """
 
 from dataclasses import dataclass
+import hashlib
 
 import numpy as np
 import skfuzzy as fuzz
@@ -19,6 +20,8 @@ class ElZeinWatermarkKey:
     scaling_factor: float
     seed: int
     carrier_indices: tuple
+    original_vertex_count: int
+    topology_signature: str
 
 
 def _validate_mesh(vertices, triangles):
@@ -48,6 +51,12 @@ def _validate_strength(a):
     if not np.isfinite(a) or a <= 0.0:
         raise ValueError("a must be a positive finite scaling factor.")
     return float(a)
+
+
+def _topology_signature(triangles):
+    """Return an order-sensitive signature of triangle connectivity."""
+    canonical = np.ascontiguousarray(triangles, dtype="<i8")
+    return hashlib.sha256(canonical.tobytes()).hexdigest()
 
 
 def _mesh_topology(vertices, triangles):
@@ -178,6 +187,8 @@ def embed_watermark_elzein_mesh(
         scaling_factor=a,
         seed=int(seed),
         carrier_indices=tuple(int(index) for index in carriers),
+        original_vertex_count=len(vertices),
+        topology_signature=_topology_signature(triangles),
     )
     return marked, key
 
@@ -192,21 +203,28 @@ def extract_watermark_elzein_mesh(
     """同一頂点インデックスの座標差をグループ内多数決して抽出する。
 
     El Zein Method II の Portion 2 は透かし入りモデルと原モデルの
-    対応頂点差を前提とする。汎用座標同期は行わず、頂点数が変化した
-    場合は全ビットを抽出不能として返す。
+    対応頂点差を前提とする。汎用座標同期は行わず、頂点数または
+    頂点順序・接続情報が変化した場合は全ビットを抽出不能として返す。
     """
-    original_vertices, triangles = _validate_mesh(original_vertices, triangles)
-    marked_vertices = np.asarray(marked_vertices, dtype=float)
-    if marked_vertices.ndim != 2 or marked_vertices.shape[1] != 3:
-        raise ValueError("marked_vertices must have shape (N, 3).")
-    if not np.isfinite(marked_vertices).all():
-        raise ValueError("marked_vertices contains NaN or infinity.")
+    original_vertices = np.asarray(original_vertices, dtype=float)
+    if original_vertices.ndim != 2 or original_vertices.shape[1] != 3:
+        raise ValueError("original_vertices must have shape (N, 3).")
+    if not np.isfinite(original_vertices).all():
+        raise ValueError("original_vertices contains NaN or infinity.")
+    marked_vertices, triangles = _validate_mesh(marked_vertices, triangles)
     carriers = _saved_carriers(key_info)
-    if len(marked_vertices) != len(original_vertices):
+    correspondence_preserved = (
+        len(original_vertices) == key_info.original_vertex_count
+        and len(marked_vertices) == key_info.original_vertex_count
+        and _topology_signature(triangles) == key_info.topology_signature
+    )
+    if not correspondence_preserved:
         if verbose:
             print(
-                f"[ElZein] vertex count changed: {len(original_vertices)} -> "
-                f"{len(marked_vertices)}; all bits are undecodable."
+                "[ElZein] vertex correspondence was lost "
+                f"(vertices {key_info.original_vertex_count} -> "
+                f"{len(marked_vertices)} or topology/order changed); "
+                "all bits are undecodable."
             )
         return [-1] * key_info.watermark_length
 

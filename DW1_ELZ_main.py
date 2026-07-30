@@ -12,15 +12,15 @@ if __name__ == "__main__":
 
     # === パラメータ設定 ===
     n = 16
-    # a = 2.53e-3  # Bunny用
-    a = 4.49e-3  # Dragon用
+    a = 2.53e-3  # Bunny用
+    # a = 4.49e-3  # Dragon用
     # a = 3.21e-3  # Armadillo用
     show = True
 
     # 1. データ取得
     image_path = "watermark16.bmp"
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
@@ -84,7 +84,7 @@ if __name__ == "__main__":
     # 5. 抽出処理
     start_extract = time.time()
     extracted_bits = DW1ELZ.extract_watermark_elzein_mesh(
-        xyz_after, xyz, triangles, key_info=key_info, verbose=True
+        xyz_after, xyz, triangles_after, key_info=key_info, verbose=True
     )
     extract_time = time.time() - start_extract
 
@@ -102,7 +102,13 @@ if __name__ == "__main__":
         if not show:
             DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
     if show:
-        DW2F.visualize_embedded_points(xyz, xyz_after)
+        if len(xyz_after) == len(xyz):
+            DW2F.visualize_embedded_points(xyz, xyz_after)
+        else:
+            print(
+                "[ElZein] Skip embedded-point comparison: "
+                f"vertex count changed ({len(xyz)} -> {len(xyz_after)})."
+            )
         DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
         o3d.visualization.draw_geometries([pcd_after])
         

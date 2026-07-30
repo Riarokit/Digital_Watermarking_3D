@@ -352,11 +352,11 @@ def prepare_methods(
         methods["ElZein"] = {
             "vertices": marked,
             "triangles": triangles,
-            "extract": lambda attacked, _attacked_triangles: (
+            "extract": lambda attacked, attacked_triangles: (
                 DW1ELZ.extract_watermark_elzein_mesh(
                     attacked,
                     vertices,
-                    triangles,
+                    attacked_triangles,
                     key_info=elzein_key,
                     verbose=False,
                 )
