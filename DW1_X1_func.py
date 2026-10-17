@@ -768,7 +768,7 @@ def match_point_cloud_to_original(
     xyz_att,
     xyz_orig,
     distance_threshold=None,
-    distance_factor=8.0,
+    distance_factor=30.0,
     verbose=True,
 ):
     """攻撃後点群を元頂点位置へ多対1対応させ、遠すぎる対応を棄却する。
@@ -818,8 +818,8 @@ def is_vertex_order_consistent(
     xyz_att,
     xyz_orig,
     k=6,
-    edge_factor=8.0,
-    max_bad_ratio=0.25,
+    edge_factor=30.0,
+    max_bad_ratio=0.01,
     max_samples=20000,
     verbose=True,
 ):
