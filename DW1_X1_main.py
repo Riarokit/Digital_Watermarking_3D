@@ -32,8 +32,8 @@ if __name__ == "__main__":
     k = 24
     radius = 0.03
     # 点群対応付け設定
-    index_distance_factor = 20.0           # 同一インデックス対応の許容距離倍率
-    coordinate_distance_factor = 2.0       # 座標最近傍対応の許容距離倍率
+    index_distance_factor = 30.0           # 同一インデックス対応の許容距離倍率
+    coordinate_distance_factor = 30.0       # 座標最近傍対応の許容距離倍率
     max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
     # 平面曲面アプローチ
     flatness_weighting = 0
@@ -104,10 +104,10 @@ if __name__ == "__main__":
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.5, iterations=50, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.5, mode='axis', axis=0)
+    xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.2, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=2.0, seed=42)
+    # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.2, seed=42)
 
     # OP. 頂点順序攻撃
     # xyz_after = DW2F.vertex_reordering_attack(xyz_after, reorder_ratio=0.01, seed=42)

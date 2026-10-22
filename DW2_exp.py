@@ -41,10 +41,10 @@ COMPARED_METHODS = [
 EXPERIMENTS = [
     ("noise", [1.0, 2.0, 3.0]),
     ("smoothing", [10, 30, 50]),
-    ("cropping", [0.7, 0.5, 0.3]),
-    ("reordering", [0.1, 0.5, 1.0]),
-    ("downsampling", [0.8, 1.0, 1.2]),
-    ("visual_quality", [None]),
+    # ("cropping", [0.7, 0.5, 0.3]),
+    # ("reordering", [0.1, 0.5, 1.0]),
+    # ("downsampling", [0.8, 1.0, 1.2]),
+    # ("visual_quality", [None]),
 ]
 
 # 攻撃パラメータ
@@ -59,8 +59,8 @@ DOWNSAMPLING_MODE = "voxel"
 GRAPH_MODE = "knn"
 KNN_K = 24
 GRAPH_RADIUS = 0.03
-INDEX_DISTANCE_FACTOR = 20.0
-COORDINATE_DISTANCE_FACTOR = 2.0
+INDEX_DISTANCE_FACTOR = 30.0
+COORDINATE_DISTANCE_FACTOR = 30.0
 MAX_INDEX_INCONSISTENCY_RATIO = 0.01
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
