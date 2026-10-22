@@ -817,13 +817,11 @@ def match_point_cloud_to_original(
 def is_vertex_order_consistent(
     xyz_att,
     xyz_orig,
-    k=6,
-    edge_factor=30.0,
+    distance_factor=20.0,
     max_bad_ratio=0.01,
-    max_samples=20000,
     verbose=True,
 ):
-    """元k-NN辺が攻撃後も同一インデックス間で局所的かを調べる。
+    """全点の同一インデックス間の直接距離で順序整合性を調べる。
 
     頂点順序が維持されていれば、元点群で近傍だったインデックス対は
     ノイズやスムージング後も概ね近い。一方、順序変更後は同じ番号の
@@ -839,18 +837,11 @@ def is_vertex_order_consistent(
         return False
     if len(xyz_orig) < 2:
         return True
-    if k < 1 or edge_factor <= 0 or not 0 <= max_bad_ratio <= 1:
+    if distance_factor <= 0 or not 0 <= max_bad_ratio <= 1:
         raise ValueError("Invalid vertex-order check parameters.")
-    if max_samples < 1:
-        raise ValueError("max_samples must be at least 1.")
-
-    sample_count = min(len(xyz_orig), int(max_samples))
-    sample_indices = np.linspace(
-        0, len(xyz_orig) - 1, sample_count, dtype=np.int64
-    )
 
     attacked_tree = cKDTree(xyz_att)
-    attacked_nn, _ = attacked_tree.query(xyz_att[sample_indices], k=2)
+    attacked_nn, _ = attacked_tree.query(xyz_att, k=2)
     spacing_values = attacked_nn[:, 1]
     spacing_values = spacing_values[
         np.isfinite(spacing_values) & (spacing_values > 1e-12)
@@ -859,30 +850,16 @@ def is_vertex_order_consistent(
         raise ValueError("Cannot estimate attacked point spacing.")
     attacked_spacing = float(np.median(spacing_values))
 
-    neighbor_count = min(int(k) + 1, len(xyz_orig))
-    original_tree = cKDTree(xyz_orig)
-    _, neighbor_indices = original_tree.query(
-        xyz_orig[sample_indices], k=neighbor_count
-    )
-    neighbor_indices = np.asarray(neighbor_indices)[:, 1:]
-    centers = np.repeat(sample_indices, neighbor_count - 1)
-    neighbors = neighbor_indices.reshape(-1)
-    attacked_edge_lengths = np.linalg.norm(
-        xyz_att[centers] - xyz_att[neighbors], axis=1
-    )
-    normalized_lengths = attacked_edge_lengths / attacked_spacing
-    normalized_lengths = normalized_lengths[np.isfinite(normalized_lengths)]
-    if len(normalized_lengths) == 0:
-        raise ValueError("Cannot evaluate vertex-order consistency.")
-
-    median_ratio = float(np.median(normalized_lengths))
-    bad_ratio = float(np.mean(normalized_lengths > edge_factor))
-    consistent = median_ratio <= edge_factor and bad_ratio <= max_bad_ratio
+    index_distances = np.linalg.norm(xyz_att - xyz_orig, axis=1)
+    normalized_distances = index_distances / attacked_spacing
+    median_ratio = float(np.median(normalized_distances))
+    bad_ratio = float(np.mean(normalized_distances > distance_factor))
+    consistent = bad_ratio <= max_bad_ratio
     if verbose:
         mode = "index" if consistent else "coordinate"
         print(
-            f"[Order] median_edge/spacing={median_ratio:.3f}, "
-            f"bad_edges={bad_ratio:.2%}, correspondence={mode}"
+            f"[Order] median_index_distance/spacing={median_ratio:.3f}, "
+            f"inconsistent_indices={bad_ratio:.2%}, correspondence={mode}"
         )
     return consistent
 
@@ -897,11 +874,9 @@ def extract_watermark_x1(
     min_spectre: float = 0.0,
     max_spectre: float = 1.0,
     skip_threshold_mode: str = "half",  # "half" or "none"
-    match_distance_factor: float = 30.0,
-    order_check_k: int = 6,
-    order_check_edge_factor: float = 30.0,
-    order_check_max_bad_ratio: float = 0.01,
-    order_check_max_samples: int = 20000,
+    index_distance_factor: float = 20.0,
+    coordinate_distance_factor: float = 2.0,
+    max_index_inconsistency_ratio: float = 0.01,
 ):
     """
     埋め込み前点群 xyz_orig から疑似平面を再構築し、
@@ -921,10 +896,8 @@ def extract_watermark_x1(
         and is_vertex_order_consistent(
             xyz_emb,
             xyz_orig,
-            k=order_check_k,
-            edge_factor=order_check_edge_factor,
-            max_bad_ratio=order_check_max_bad_ratio,
-            max_samples=order_check_max_samples,
+            distance_factor=index_distance_factor,
+            max_bad_ratio=max_index_inconsistency_ratio,
             verbose=True,
         )
     ):
@@ -939,7 +912,7 @@ def extract_watermark_x1(
         xyz_emb, valid_vertices, _, _ = match_point_cloud_to_original(
             xyz_emb,
             xyz_orig,
-            distance_factor=match_distance_factor,
+            distance_factor=coordinate_distance_factor,
             verbose=True,
         )
     if embed_bits_length <= 0:

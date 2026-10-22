@@ -31,19 +31,17 @@ if __name__ == "__main__":
     graph_mode = 'knn'
     k = 24
     radius = 0.03
-    # 同数点群で頂点順序が維持されているかを判定する設定
-    order_check_k = 6                 # 元点群で調べる近傍数
-    order_check_edge_factor = 30.0     # 攻撃後点間隔に対するアウト辺判定倍率
-    order_check_max_bad_ratio = 0.01  # アウト辺を許容する最大割合
-    order_check_max_samples = 20000   # 判定に使う最大頂点数
-    match_distance_factor = 30.0       # 座標対応を許容する点間隔倍率
+    # 点群対応付け設定
+    index_distance_factor = 20.0           # 同一インデックス対応の許容距離倍率
+    coordinate_distance_factor = 2.0       # 座標最近傍対応の許容距離倍率
+    max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化
     show = True
 
     # Bunny全周波用
-    # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
+    beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
     # beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
@@ -51,7 +49,7 @@ if __name__ == "__main__":
     # Dragon全周波用
     # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
-    beta = 2.9e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
+    # beta = 2.9e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
     # Dragon高周波用
     # beta = 2.9e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Armadillo全周波用
@@ -120,11 +118,9 @@ if __name__ == "__main__":
         xyz_after, xyz, labels, watermark_bits_length,
         graph_mode=graph_mode, k=k, radius=radius,
         min_spectre=min_spectre, max_spectre=max_spectre,
-        order_check_k=order_check_k,
-        order_check_edge_factor=order_check_edge_factor,
-        order_check_max_bad_ratio=order_check_max_bad_ratio,
-        order_check_max_samples=order_check_max_samples,
-        match_distance_factor=match_distance_factor,
+        index_distance_factor=index_distance_factor,
+        coordinate_distance_factor=coordinate_distance_factor,
+        max_index_inconsistency_ratio=max_index_inconsistency_ratio,
     )
     extract_time = time.time() - start
 
