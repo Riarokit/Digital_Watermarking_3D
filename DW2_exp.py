@@ -17,8 +17,8 @@ import DW2_func as DW2F
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
 # INPUT_FILE = "C:/bun_zipper.ply"
-INPUT_FILE = "C:/dragon.ply"
-# INPUT_FILE = "C:/Armadillo.ply"
+# INPUT_FILE = "C:/dragon.ply"
+INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
 # KMeans・FCMの初期値を変えて作る埋め込みモデル数
@@ -39,12 +39,12 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    # ("noise", [1.0, 2.0, 3.0]),
-    # ("smoothing", [10, 30, 50]),
+    ("noise", [1.0, 2.0, 3.0]),
+    ("smoothing", [10, 30, 50]),
     ("cropping", [0.7, 0.5, 0.3]),
     ("reordering", [0.1, 0.5, 1.0]),
     ("downsampling", [0.8, 1.0, 1.2]),
-    # ("visual_quality", [None]),
+    ("visual_quality", [None]),
 ]
 
 # 攻撃パラメータ
@@ -62,6 +62,7 @@ GRAPH_RADIUS = 0.03
 INDEX_DISTANCE_FACTOR = 30.0
 COORDINATE_DISTANCE_FACTOR = 30.0
 MAX_INDEX_INCONSISTENCY_RATIO = 0.01
+ELZEIN_CLUSTER_POINTS = 400
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
@@ -322,6 +323,13 @@ def prepare_methods(
         elzein_selected = DW1ELZ.local_feature_clustering(
             vertices, triangles, seed=embedding_seed, verbose=False
         )
+        elzein_clusters = DW1ELZ.spatially_cluster_carriers(
+            vertices,
+            elzein_selected,
+            target_cluster_size=ELZEIN_CLUSTER_POINTS,
+            seed=embedding_seed,
+            verbose=False,
+        )
         _, elzein_strength = match_strength(
             vertices,
             lambda a: DW1ELZ.embed_watermark_elzein_mesh(
@@ -331,7 +339,7 @@ def prepare_methods(
                 a=a,
                 verbose=False,
                 seed=embedding_seed,
-                carrier_indices=elzein_selected,
+                carrier_clusters=elzein_clusters,
             )[0],
             target_mse,
             1e-3,
@@ -345,7 +353,7 @@ def prepare_methods(
             a=elzein_strength,
             verbose=False,
             seed=embedding_seed,
-            carrier_indices=elzein_selected,
+            carrier_clusters=elzein_clusters,
         )
         methods["ElZein"] = {
             "vertices": marked,

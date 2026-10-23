@@ -126,6 +126,7 @@ if __name__ == "__main__":
     # 8. 固有評価
     print("[ElZein] Portion 2-only / grouped redundant majority voting")
     print(f"[ElZein] scaling factor a: {a}")
+    print(f"[ElZein] spatial carrier clusters: {len(key_info.carrier_clusters)}")
     print(f"[ElZein] carrier vertices: {len(key_info.carrier_indices)}")
     print(f"埋込時間: {embed_time:.2f}秒")
     print(f"抽出時間: {extract_time:.2f}秒\n")

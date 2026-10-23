@@ -10,8 +10,12 @@ import hashlib
 
 import numpy as np
 import skfuzzy as fuzz
+from sklearn.cluster import KMeans
 
-from DW1_X1_func import align_attacked_vertices_to_original
+from DW1_X1_func import (
+    align_attacked_vertices_to_original,
+    repeat_bits_blockwise,
+)
 
 @dataclass(frozen=True)
 class ElZeinWatermarkKey:
@@ -21,9 +25,14 @@ class ElZeinWatermarkKey:
     watermark_length: int
     scaling_factor: float
     seed: int
-    carrier_indices: tuple
+    carrier_clusters: tuple
     original_vertex_count: int
     topology_signature: str
+
+    @property
+    def carrier_indices(self):
+        """Flattened carrier indices retained for reporting compatibility."""
+        return tuple(index for cluster in self.carrier_clusters for index in cluster)
 
 
 def _validate_mesh(vertices, triangles):
@@ -139,15 +148,59 @@ def local_feature_clustering(vertices, triangles, verbose=False, seed=42):
     return selected
 
 
-def _saved_carriers(key_info):
+def spatially_cluster_carriers(
+    vertices,
+    carrier_indices,
+    target_cluster_size=400,
+    seed=42,
+    verbose=False,
+):
+    """Partition FCM-selected carriers into spatial KMeans clusters."""
+    vertices = np.asarray(vertices, dtype=float)
+    carriers = np.asarray(carrier_indices, dtype=np.int64).reshape(-1)
+    if target_cluster_size <= 0:
+        raise ValueError("target_cluster_size must be positive.")
+    if len(carriers) == 0:
+        raise ValueError("carrier_indices must not be empty.")
+    if np.any(carriers < 0) or np.any(carriers >= len(vertices)):
+        raise ValueError("carrier_indices contains an invalid vertex index.")
+
+    cluster_count = len(carriers) // int(target_cluster_size)
+    if cluster_count < 1:
+        raise ValueError(
+            f"target_cluster_size={target_cluster_size} exceeds the "
+            f"FCM-selected carrier count {len(carriers)}."
+        )
+    labels = KMeans(
+        n_clusters=cluster_count,
+        random_state=seed,
+        n_init=10,
+    ).fit_predict(vertices[carriers])
+    clusters = tuple(
+        tuple(int(index) for index in carriers[labels == cluster_id])
+        for cluster_id in range(cluster_count)
+    )
+    if verbose:
+        sizes = np.asarray([len(cluster) for cluster in clusters])
+        print(
+            f"[ElZein] spatial carrier clusters={len(clusters)}, "
+            f"size min/mean/max={sizes.min()}/{sizes.mean():.1f}/{sizes.max()}"
+        )
+    return clusters
+
+
+def _saved_carrier_clusters(key_info):
     if not isinstance(key_info, ElZeinWatermarkKey):
         raise TypeError("key_info must be returned by the El Zein embedder.")
     if key_info.mode != "elzein":
         raise ValueError(f"Invalid El Zein key mode: {key_info.mode!r}.")
-    carriers = np.asarray(key_info.carrier_indices, dtype=np.int64)
-    if len(carriers) < key_info.watermark_length:
-        raise ValueError("The saved carrier list is shorter than the watermark.")
-    return carriers
+    clusters = tuple(
+        np.asarray(cluster, dtype=np.int64)
+        for cluster in key_info.carrier_clusters
+    )
+    if not clusters:
+        raise ValueError("The saved carrier-cluster list is empty.")
+    return clusters
 
 
 def embed_watermark_elzein_mesh(
@@ -158,37 +211,76 @@ def embed_watermark_elzein_mesh(
     verbose=True,
     seed=42,
     carrier_indices=None,
+    carrier_clusters=None,
+    target_cluster_size=400,
 ):
     """Portion 2を全moderate頂点へ冗長に埋め込む。"""
     vertices, triangles = _validate_mesh(vertices, triangles)
     bits = _validate_bits(watermark_bits)
     a = _validate_strength(a)
 
-    if carrier_indices is None:
-        carriers = local_feature_clustering(
-            vertices, triangles, verbose=verbose, seed=seed
+    if carrier_clusters is not None and carrier_indices is not None:
+        raise ValueError(
+            "Specify either carrier_indices or carrier_clusters, not both."
+        )
+    if carrier_clusters is None:
+        if carrier_indices is None:
+            carriers = local_feature_clustering(
+                vertices, triangles, verbose=verbose, seed=seed
+            )
+        else:
+            carriers = np.asarray(carrier_indices, dtype=np.int64).reshape(-1)
+        clusters = spatially_cluster_carriers(
+            vertices,
+            carriers,
+            target_cluster_size=target_cluster_size,
+            seed=seed,
+            verbose=verbose,
         )
     else:
-        carriers = np.asarray(carrier_indices, dtype=np.int64).reshape(-1)
-        if np.any(carriers < 0) or np.any(carriers >= len(vertices)):
-            raise ValueError("carrier_indices contains an invalid vertex index.")
-    if len(carriers) < len(bits):
+        clusters = tuple(
+            tuple(int(index) for index in cluster)
+            for cluster in carrier_clusters
+        )
+
+    flattened_carriers = np.asarray(
+        [index for cluster in clusters for index in cluster], dtype=np.int64
+    )
+    if len(flattened_carriers) == 0:
+        raise ValueError("carrier_clusters must contain at least one vertex.")
+    if np.any(flattened_carriers < 0) or np.any(flattened_carriers >= len(vertices)):
+        raise ValueError("carrier_clusters contains an invalid vertex index.")
+    if len(np.unique(flattened_carriers)) != len(flattened_carriers):
+        raise ValueError("carrier_clusters must be disjoint.")
+
+    usable_clusters = tuple(
+        cluster for cluster in clusters if len(cluster) >= len(bits)
+    )
+    if not usable_clusters:
         raise ValueError(
-            f"Watermark needs {len(bits)} groups, but the moderate cluster "
-            f"contains only {len(carriers)} vertices."
+            f"No spatial carrier cluster contains the {len(bits)} vertices "
+            "required to embed one complete watermark."
+        )
+    if verbose and len(usable_clusters) != len(clusters):
+        print(
+            f"[ElZein] skipped {len(clusters) - len(usable_clusters)} spatial "
+            f"cluster(s) smaller than the {len(bits)}-bit watermark."
         )
 
     marked = vertices.copy()
-    groups = np.array_split(carriers, len(bits))
-    for bit, group in zip(bits, groups):
-        marked[group] += a if bit else -a
+    for cluster in usable_clusters:
+        cluster = np.asarray(cluster, dtype=np.int64)
+        repeat_count = len(cluster) // len(bits)
+        repeated_bits = repeat_bits_blockwise(bits, repeat_count, len(cluster))
+        signs = 2.0 * np.asarray(repeated_bits, dtype=float) - 1.0
+        marked[cluster] += a * signs[:, None]
 
     key = ElZeinWatermarkKey(
         mode="elzein",
         watermark_length=len(bits),
         scaling_factor=a,
         seed=int(seed),
-        carrier_indices=tuple(int(index) for index in carriers),
+        carrier_clusters=usable_clusters,
         original_vertex_count=len(vertices),
         topology_signature=_topology_signature(triangles),
     )
@@ -217,7 +309,7 @@ def extract_watermark_elzein_mesh(
     if not np.isfinite(original_vertices).all():
         raise ValueError("original_vertices contains NaN or infinity.")
     marked_vertices, triangles = _validate_mesh(marked_vertices, triangles)
-    carriers = _saved_carriers(key_info)
+    carrier_clusters = _saved_carrier_clusters(key_info)
     if len(original_vertices) != key_info.original_vertex_count:
         raise ValueError(
             "original_vertices does not match the mesh used for embedding."
@@ -233,19 +325,28 @@ def extract_watermark_elzein_mesh(
         )
     )
 
-    groups = np.array_split(carriers, key_info.watermark_length)
-    extracted = []
-    for group in groups:
-        # Match the proposed method's complete-cluster rule: a bit group is
-        # unusable when even one of its original carriers has no valid match.
-        if not np.all(matched_vertex_mask[group]):
-            extracted.append(-1)
+    bit_votes = [[] for _ in range(key_info.watermark_length)]
+    for cluster in carrier_clusters:
+        # Match the proposed method's complete-cluster rule: one invalid
+        # correspondence discards this cluster's complete watermark copy.
+        if not np.all(matched_vertex_mask[cluster]):
             continue
+        repeat_count = len(cluster) // key_info.watermark_length
+        bit_assignment = repeat_bits_blockwise(
+            np.arange(key_info.watermark_length),
+            repeat_count,
+            len(cluster),
+        )
         coordinate_sums = (
-            aligned_marked_vertices[group] - original_vertices[group]
+            aligned_marked_vertices[cluster] - original_vertices[cluster]
         ).sum(axis=1)
-        ones = int(np.count_nonzero(coordinate_sums > 0))
-        zeros = len(group) - ones
+        for bit_index, vote in zip(bit_assignment, coordinate_sums > 0):
+            bit_votes[int(bit_index)].append(int(vote))
+
+    extracted = []
+    for votes in bit_votes:
+        ones = votes.count(1)
+        zeros = votes.count(0)
         extracted.append(-1 if ones == zeros else int(ones > zeros))
     return extracted
 
@@ -253,6 +354,7 @@ def extract_watermark_elzein_mesh(
 __all__ = [
     "ElZeinWatermarkKey",
     "local_feature_clustering",
+    "spatially_cluster_carriers",
     "embed_watermark_elzein_mesh",
     "extract_watermark_elzein_mesh",
 ]
