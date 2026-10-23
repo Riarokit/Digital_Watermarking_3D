@@ -12,15 +12,15 @@ if __name__ == "__main__":
 
     # === パラメータ設定 ===
     n = 16
-    a = 2.53e-3  # Bunny用
-    # a = 4.49e-3  # Dragon用
+    # a = 2.53e-3  # Bunny用
+    a = 4.49e-3  # Dragon用
     # a = 3.21e-3  # Armadillo用
     show = True
 
     # 1. データ取得
     image_path = "watermark16.bmp"
-    input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon.ply"
+    # input_file = "C:/bun_zipper.ply"
+    input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
@@ -67,9 +67,9 @@ if __name__ == "__main__":
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.2, iterations=30, k=6)
 
     # OP. 切り取り攻撃
-    # xyz_after, triangles_after = DW2F.cropping_attack(
-    #     xyz_after, keep_ratio=0.5, mode="axis", axis=0, triangles=triangles_after
-    # )
+    xyz_after, triangles_after = DW2F.cropping_attack(
+        xyz_after, keep_ratio=0.5, mode="axis", axis=0, triangles=triangles_after
+    )
 
     # OP. ダウンサンプリング攻撃
     # xyz_after, triangles_after = DW2F.downsampling_attack(

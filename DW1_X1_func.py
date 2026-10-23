@@ -885,6 +885,51 @@ def is_vertex_order_consistent(
         )
     return consistent
 
+
+def align_attacked_vertices_to_original(
+    attacked_vertices,
+    original_vertices,
+    index_distance_factor=20.0,
+    coordinate_distance_factor=2.0,
+    max_index_inconsistency_ratio=0.01,
+    verbose=True,
+):
+    """Align attacked vertices to original-vertex order using X1 matching.
+
+    Index correspondence is retained when the arrays have equal shape and the
+    order-consistency test succeeds. Otherwise coordinate-based nearest-neighbor
+    matching is used. The returned mask identifies original vertices with a
+    match inside the common distance threshold.
+    """
+    attacked_vertices = np.asarray(attacked_vertices, dtype=float)
+    original_vertices = np.asarray(original_vertices, dtype=float)
+    if (
+        attacked_vertices.shape == original_vertices.shape
+        and is_vertex_order_consistent(
+            attacked_vertices,
+            original_vertices,
+            distance_factor=index_distance_factor,
+            max_bad_ratio=max_index_inconsistency_ratio,
+            verbose=verbose,
+        )
+    ):
+        matched_vertex_mask = np.ones(len(original_vertices), dtype=bool)
+        return attacked_vertices.copy(), matched_vertex_mask
+
+    if verbose and len(attacked_vertices) != len(original_vertices):
+        print(
+            f"[Order] vertex count changed: {len(original_vertices)} -> "
+            f"{len(attacked_vertices)}; correspondence=coordinate"
+        )
+    aligned_vertices, matched_vertex_mask, _, _ = match_point_cloud_to_original(
+        attacked_vertices,
+        original_vertices,
+        distance_factor=coordinate_distance_factor,
+        verbose=verbose,
+    )
+    return aligned_vertices, matched_vertex_mask
+
+
 def extract_watermark_x1(
     xyz_emb: np.ndarray,
     xyz_orig: np.ndarray,
@@ -913,35 +958,16 @@ def extract_watermark_x1(
     """
     xyz_emb = np.asarray(xyz_emb, dtype=float)
     xyz_orig = np.asarray(xyz_orig, dtype=float)
-    if (
-        xyz_emb.shape == xyz_orig.shape
-        and is_vertex_order_consistent(
+    aligned_attacked_vertices, matched_vertex_mask = (
+        align_attacked_vertices_to_original(
             xyz_emb,
             xyz_orig,
-            distance_factor=index_distance_factor,
-            max_bad_ratio=max_index_inconsistency_ratio,
+            index_distance_factor=index_distance_factor,
+            coordinate_distance_factor=coordinate_distance_factor,
+            max_index_inconsistency_ratio=max_index_inconsistency_ratio,
             verbose=True,
         )
-    ):
-        matched_vertex_mask = np.ones(len(xyz_orig), dtype=bool)
-        aligned_attacked_vertices = xyz_emb.copy()
-    else:
-        if len(xyz_emb) != len(xyz_orig):
-            print(
-                f"[Order] vertex count changed: {len(xyz_orig)} -> "
-                f"{len(xyz_emb)}; correspondence=coordinate"
-            )
-        (
-            aligned_attacked_vertices,
-            matched_vertex_mask,
-            _,
-            _,
-        ) = match_point_cloud_to_original(
-            xyz_emb,
-            xyz_orig,
-            distance_factor=coordinate_distance_factor,
-            verbose=True,
-        )
+    )
     if embed_bits_length <= 0:
         return []
 

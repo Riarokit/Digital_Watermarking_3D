@@ -16,8 +16,8 @@ import DW2_func as DW2F
 
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
-INPUT_FILE = "C:/bun_zipper.ply"
-# INPUT_FILE = "C:/dragon.ply"
+# INPUT_FILE = "C:/bun_zipper.ply"
+INPUT_FILE = "C:/dragon.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
@@ -32,18 +32,18 @@ VERBOSE_TRIAL_LOGS = False
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    # "ElZein",
+    "ElZein",
     # "Hu",
     # "Verma",
-    "Proposed",
+    # "Proposed",
 ]
 
 EXPERIMENTS = [
-    ("noise", [1.0, 2.0, 3.0]),
-    ("smoothing", [10, 30, 50]),
-    # ("cropping", [0.7, 0.5, 0.3]),
-    # ("reordering", [0.1, 0.5, 1.0]),
-    # ("downsampling", [0.8, 1.0, 1.2]),
+    # ("noise", [1.0, 2.0, 3.0]),
+    # ("smoothing", [10, 30, 50]),
+    ("cropping", [0.7, 0.5, 0.3]),
+    ("reordering", [0.1, 0.5, 1.0]),
+    ("downsampling", [0.8, 1.0, 1.2]),
     # ("visual_quality", [None]),
 ]
 
@@ -357,6 +357,11 @@ def prepare_methods(
                     attacked_triangles,
                     key_info=elzein_key,
                     verbose=False,
+                    index_distance_factor=INDEX_DISTANCE_FACTOR,
+                    coordinate_distance_factor=COORDINATE_DISTANCE_FACTOR,
+                    max_index_inconsistency_ratio=(
+                        MAX_INDEX_INCONSISTENCY_RATIO
+                    ),
                 )
             ),
         }

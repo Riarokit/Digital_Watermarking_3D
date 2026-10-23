@@ -11,6 +11,8 @@ import hashlib
 import numpy as np
 import skfuzzy as fuzz
 
+from DW1_X1_func import align_attacked_vertices_to_original
+
 @dataclass(frozen=True)
 class ElZeinWatermarkKey:
     """埋め込み時のキャリア位置と抽出設定。"""
@@ -199,6 +201,9 @@ def extract_watermark_elzein_mesh(
     triangles,
     key_info,
     verbose=False,
+    index_distance_factor=20.0,
+    coordinate_distance_factor=2.0,
+    max_index_inconsistency_ratio=0.01,
 ):
     """同一頂点インデックスの座標差をグループ内多数決して抽出する。
 
@@ -213,26 +218,31 @@ def extract_watermark_elzein_mesh(
         raise ValueError("original_vertices contains NaN or infinity.")
     marked_vertices, triangles = _validate_mesh(marked_vertices, triangles)
     carriers = _saved_carriers(key_info)
-    correspondence_preserved = (
-        len(original_vertices) == key_info.original_vertex_count
-        and len(marked_vertices) == key_info.original_vertex_count
-        and _topology_signature(triangles) == key_info.topology_signature
+    if len(original_vertices) != key_info.original_vertex_count:
+        raise ValueError(
+            "original_vertices does not match the mesh used for embedding."
+        )
+    aligned_marked_vertices, matched_vertex_mask = (
+        align_attacked_vertices_to_original(
+            marked_vertices,
+            original_vertices,
+            index_distance_factor=index_distance_factor,
+            coordinate_distance_factor=coordinate_distance_factor,
+            max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+            verbose=verbose,
+        )
     )
-    if not correspondence_preserved:
-        if verbose:
-            print(
-                "[ElZein] vertex correspondence was lost "
-                f"(vertices {key_info.original_vertex_count} -> "
-                f"{len(marked_vertices)} or topology/order changed); "
-                "all bits are undecodable."
-            )
-        return [-1] * key_info.watermark_length
 
     groups = np.array_split(carriers, key_info.watermark_length)
     extracted = []
     for group in groups:
+        # Match the proposed method's complete-cluster rule: a bit group is
+        # unusable when even one of its original carriers has no valid match.
+        if not np.all(matched_vertex_mask[group]):
+            extracted.append(-1)
+            continue
         coordinate_sums = (
-            marked_vertices[group] - original_vertices[group]
+            aligned_marked_vertices[group] - original_vertices[group]
         ).sum(axis=1)
         ones = int(np.count_nonzero(coordinate_sums > 0))
         zeros = len(group) - ones
