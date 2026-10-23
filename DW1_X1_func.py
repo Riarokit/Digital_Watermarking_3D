@@ -574,6 +574,23 @@ def repeat_bits_blockwise(bits, n_repeat, total_length):
     return rep
 
 
+def _small_cluster_size_limit(watermark_length, small_cluster_policy):
+    """Return the inclusive size limit used to reject small clusters.
+
+    ``half_watermark`` preserves the existing rule: clusters containing at
+    most half as many vertices as watermark bits are not used. ``none``
+    disables only this size-based rejection; correspondence failures are
+    handled separately during extraction.
+    """
+    if small_cluster_policy == "half_watermark":
+        return watermark_length / 2
+    if small_cluster_policy == "none":
+        return -1
+    raise ValueError(
+        "small_cluster_policy must be 'half_watermark' or 'none'."
+    )
+
+
 def prepare_watermark_x1_band_displacements(
     xyz,
     labels,
@@ -584,7 +601,7 @@ def prepare_watermark_x1_band_displacements(
     radius=0.05,
     flatness_weighting=0,
     k_neighbors=20,
-    skip_threshold_mode="half",
+    small_cluster_policy="half_watermark",
 ):
     """複数のGFT周波数帯について、beta=1の座標変位を一括計算する。
 
@@ -626,13 +643,15 @@ def prepare_watermark_x1_band_displacements(
         weights = compute_cluster_weights(flatness, flatness_weighting)
     phi = float(np.max(np.ptp(xyz, axis=0)))
     displacements = {name: np.zeros_like(xyz) for name in names}
-    skip_threshold = len(embed_bits) / 2 if skip_threshold_mode == "half" else -1
+    small_cluster_size_limit = _small_cluster_size_limit(
+        len(embed_bits), small_cluster_policy
+    )
 
     for cluster_id in cluster_ids:
-        indices = np.flatnonzero(labels == cluster_id)
-        if len(indices) <= skip_threshold:
+        cluster_indices = np.flatnonzero(labels == cluster_id)
+        if len(cluster_indices) <= small_cluster_size_limit:
             continue
-        points = xyz[indices]
+        points = xyz[cluster_indices]
         _, normal = compute_pseudoplane_pca(points)
         graph = build_graph(points, graph_mode=graph_mode, k=k, radius=radius)
 
@@ -655,7 +674,7 @@ def prepare_watermark_x1_band_displacements(
             graph, coefficient_changes
         )
         for column, name in enumerate(names):
-            displacements[name][indices] = (
+            displacements[name][cluster_indices] = (
                 height_changes[:, column, None] * normal[None, :]
             )
 
@@ -673,7 +692,7 @@ def embed_watermark_x1(
     k_neighbors: int = 20,
     min_spectre: float = 0.0,
     max_spectre: float = 1.0,
-    skip_threshold_mode: str = "half",  # "half" or "none"
+    small_cluster_policy: str = "half_watermark",
 ):
     """
     各クラスタで疑似平面を推定し、その平面からの高さ（符号付き距離）hを信号としてGFT→係数変調→逆GFT。
@@ -709,30 +728,31 @@ def embed_watermark_x1(
         np.max(xyz[:, 2]) - np.min(xyz[:, 2])
     )
 
-    bits_len = len(embed_bits)
-    if bits_len == 0:
+    watermark_length = len(embed_bits)
+    if watermark_length == 0:
         return xyz_after
 
-    if skip_threshold_mode == "half":
-        skip_threshold = bits_len / 2
-    else:
-        skip_threshold = -1  # 実質スキップしない
+    small_cluster_size_limit = _small_cluster_size_limit(
+        watermark_length, small_cluster_policy
+    )
 
-    for c in cluster_ids:
-        idx = np.where(labels == c)[0]
-        if len(idx) <= skip_threshold:
+    for cluster_id in cluster_ids:
+        cluster_indices = np.flatnonzero(labels == cluster_id)
+        if len(cluster_indices) <= small_cluster_size_limit:
             continue
 
-        pts = xyz[idx]
+        cluster_points = xyz[cluster_indices]
 
         # 疑似平面（PCA）推定
-        centroid, normal = compute_pseudoplane_pca(pts)
+        centroid, normal = compute_pseudoplane_pca(cluster_points)
 
         # 高さ信号
-        h = cluster_height_signal(pts, centroid, normal)
+        h = cluster_height_signal(cluster_points, centroid, normal)
 
         # グラフ構築
-        W = build_graph(pts, graph_mode=graph_mode, k=k, radius=radius)
+        W = build_graph(
+            cluster_points, graph_mode=graph_mode, k=k, radius=radius
+        )
         basis, eigvals = gft_basis_auto(W)
 
         # 高さ信号をGFT
@@ -746,11 +766,11 @@ def embed_watermark_x1(
             continue
 
         # 冗長化
-        n_repeat = Q_embed // bits_len if bits_len > 0 else 1
+        n_repeat = Q_embed // watermark_length
         redundant_bits = repeat_bits_blockwise(embed_bits, n_repeat, Q_embed)
 
         # 係数変調
-        w_c = weights.get(c, 1.0)
+        w_c = weights.get(cluster_id, 1.0)
         for i in range(Q_embed):
             w = redundant_bits[i] * 2 - 1  # 0/1 -> -1/+1
             gft_coeffs[q_start + i] += w * beta * w_c * phi
@@ -760,7 +780,9 @@ def embed_watermark_x1(
 
         # 座標更新（法線方向のみ）
         delta_h = (h_emb - h)  # (Nc,)
-        xyz_after[idx] = pts + delta_h[:, None] * normal[None, :]
+        xyz_after[cluster_indices] = (
+            cluster_points + delta_h[:, None] * normal[None, :]
+        )
 
     return xyz_after
 
@@ -873,7 +895,7 @@ def extract_watermark_x1(
     radius: float = 0.05,
     min_spectre: float = 0.0,
     max_spectre: float = 1.0,
-    skip_threshold_mode: str = "half",  # "half" or "none"
+    small_cluster_policy: str = "half_watermark",
     index_distance_factor: float = 20.0,
     coordinate_distance_factor: float = 2.0,
     max_index_inconsistency_ratio: float = 0.01,
@@ -901,15 +923,20 @@ def extract_watermark_x1(
             verbose=True,
         )
     ):
-        valid_vertices = np.ones(len(xyz_orig), dtype=bool)
-        xyz_emb = xyz_emb.copy()
+        matched_vertex_mask = np.ones(len(xyz_orig), dtype=bool)
+        aligned_attacked_vertices = xyz_emb.copy()
     else:
         if len(xyz_emb) != len(xyz_orig):
             print(
                 f"[Order] vertex count changed: {len(xyz_orig)} -> "
                 f"{len(xyz_emb)}; correspondence=coordinate"
             )
-        xyz_emb, valid_vertices, _, _ = match_point_cloud_to_original(
+        (
+            aligned_attacked_vertices,
+            matched_vertex_mask,
+            _,
+            _,
+        ) = match_point_cloud_to_original(
             xyz_emb,
             xyz_orig,
             distance_factor=coordinate_distance_factor,
@@ -918,22 +945,23 @@ def extract_watermark_x1(
     if embed_bits_length <= 0:
         return []
 
-    if skip_threshold_mode == "half":
-        skip_threshold = embed_bits_length / 2
-    else:
-        skip_threshold = -1
+    small_cluster_size_limit = _small_cluster_size_limit(
+        embed_bits_length, small_cluster_policy
+    )
 
     bit_lists = [[] for _ in range(embed_bits_length)]
 
-    for c in np.unique(labels):
-        idx = np.where(labels == c)[0]
-        if len(idx) <= skip_threshold:
+    for cluster_id in np.unique(labels):
+        cluster_indices = np.flatnonzero(labels == cluster_id)
+        if len(cluster_indices) <= small_cluster_size_limit:
             continue
-        if not np.all(valid_vertices[idx]):
+        # GFT requires the original cluster membership to remain complete.
+        # This erasure rule is independent of small_cluster_policy.
+        if not np.all(matched_vertex_mask[cluster_indices]):
             continue
 
-        pts_orig = xyz_orig[idx]
-        pts_emb = xyz_emb[idx]
+        pts_orig = xyz_orig[cluster_indices]
+        pts_emb = aligned_attacked_vertices[cluster_indices]
         if len(pts_orig) != len(pts_emb):
             continue
 
