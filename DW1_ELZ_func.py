@@ -296,6 +296,7 @@ def extract_watermark_elzein_mesh(
     index_distance_factor=20.0,
     coordinate_distance_factor=2.0,
     max_index_inconsistency_ratio=0.01,
+    correspondence_mode="auto",
 ):
     """同一頂点インデックスの座標差をグループ内多数決して抽出する。
 
@@ -321,6 +322,7 @@ def extract_watermark_elzein_mesh(
             index_distance_factor=index_distance_factor,
             coordinate_distance_factor=coordinate_distance_factor,
             max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+            correspondence_mode=correspondence_mode,
             verbose=verbose,
         )
     )

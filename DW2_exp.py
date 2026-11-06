@@ -16,9 +16,9 @@ import DW2_func as DW2F
 
 # ============================== 共通設定 ==============================
 TARGET_PSNR = 60.0
-# INPUT_FILE = "C:/bun_zipper.ply"
+INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/dragon.ply"
-INPUT_FILE = "C:/Armadillo.ply"
+# INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
 # KMeans・FCMの初期値を変えて作る埋め込みモデル数
@@ -33,9 +33,9 @@ VERBOSE_TRIAL_LOGS = False
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
     "ElZein",
-    # "Hu",
+    "Hu",
     # "Verma",
-    # "Proposed",
+    "Proposed",
 ]
 
 EXPERIMENTS = [
@@ -49,7 +49,7 @@ EXPERIMENTS = [
 
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.5
+SMOOTHING_LAMBDA = 1.0
 SMOOTHING_K = 6
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
@@ -62,6 +62,7 @@ GRAPH_RADIUS = 0.03
 INDEX_DISTANCE_FACTOR = 30.0
 COORDINATE_DISTANCE_FACTOR = 30.0
 MAX_INDEX_INCONSISTENCY_RATIO = 0.01
+CORRESPONDENCE_MODE = "coordinate"  # "auto", "index", or "coordinate"
 ELZEIN_CLUSTER_POINTS = 400
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
@@ -370,6 +371,7 @@ def prepare_methods(
                     max_index_inconsistency_ratio=(
                         MAX_INDEX_INCONSISTENCY_RATIO
                     ),
+                    correspondence_mode=CORRESPONDENCE_MODE,
                 )
             ),
         }
@@ -487,6 +489,7 @@ def prepare_methods(
                                 max_index_inconsistency_ratio=(
                                     MAX_INDEX_INCONSISTENCY_RATIO
                                 ),
+                                correspondence_mode=CORRESPONDENCE_MODE,
                             )
                         )
                     ),

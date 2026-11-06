@@ -101,7 +101,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=3.0, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.5, iterations=50, k=6)
+    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=1.0, iterations=50, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.2, mode='axis', axis=0)

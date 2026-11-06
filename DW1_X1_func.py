@@ -892,19 +892,26 @@ def align_attacked_vertices_to_original(
     index_distance_factor=20.0,
     coordinate_distance_factor=2.0,
     max_index_inconsistency_ratio=0.01,
+    correspondence_mode="auto",
     verbose=True,
 ):
     """Align attacked vertices to original-vertex order using X1 matching.
 
-    Index correspondence is retained when the arrays have equal shape and the
-    order-consistency test succeeds. Otherwise coordinate-based nearest-neighbor
-    matching is used. The returned mask identifies original vertices with a
-    match inside the common distance threshold.
+    ``correspondence_mode="auto"`` retains index correspondence when the arrays
+    have equal shape and the order-consistency test succeeds. ``"coordinate"``
+    always uses coordinate-based nearest-neighbor matching, while ``"index"``
+    requires equal array shapes. The returned mask identifies original vertices
+    with a match inside the common distance threshold.
     """
+    if correspondence_mode not in {"auto", "index", "coordinate"}:
+        raise ValueError(
+            "correspondence_mode must be 'auto', 'index', or 'coordinate'."
+        )
     attacked_vertices = np.asarray(attacked_vertices, dtype=float)
     original_vertices = np.asarray(original_vertices, dtype=float)
-    if (
-        attacked_vertices.shape == original_vertices.shape
+    use_index = correspondence_mode == "index" or (
+        correspondence_mode == "auto"
+        and attacked_vertices.shape == original_vertices.shape
         and is_vertex_order_consistent(
             attacked_vertices,
             original_vertices,
@@ -912,15 +919,23 @@ def align_attacked_vertices_to_original(
             max_bad_ratio=max_index_inconsistency_ratio,
             verbose=verbose,
         )
-    ):
+    )
+    if use_index:
+        if attacked_vertices.shape != original_vertices.shape:
+            raise ValueError(
+                "index correspondence requires equal attacked/original shapes."
+            )
         matched_vertex_mask = np.ones(len(original_vertices), dtype=bool)
         return attacked_vertices.copy(), matched_vertex_mask
 
-    if verbose and len(attacked_vertices) != len(original_vertices):
-        print(
-            f"[Order] vertex count changed: {len(original_vertices)} -> "
-            f"{len(attacked_vertices)}; correspondence=coordinate"
-        )
+    if verbose:
+        if correspondence_mode == "coordinate":
+            print("[Order] correspondence=coordinate (forced)")
+        elif len(attacked_vertices) != len(original_vertices):
+            print(
+                f"[Order] vertex count changed: {len(original_vertices)} -> "
+                f"{len(attacked_vertices)}; correspondence=coordinate"
+            )
     aligned_vertices, matched_vertex_mask, _, _ = match_point_cloud_to_original(
         attacked_vertices,
         original_vertices,
@@ -944,6 +959,7 @@ def extract_watermark_x1(
     index_distance_factor: float = 20.0,
     coordinate_distance_factor: float = 2.0,
     max_index_inconsistency_ratio: float = 0.01,
+    correspondence_mode: str = "auto",
 ):
     """
     埋め込み前点群 xyz_orig から疑似平面を再構築し、
@@ -965,6 +981,7 @@ def extract_watermark_x1(
             index_distance_factor=index_distance_factor,
             coordinate_distance_factor=coordinate_distance_factor,
             max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+            correspondence_mode=correspondence_mode,
             verbose=True,
         )
     )
