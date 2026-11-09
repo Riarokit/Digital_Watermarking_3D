@@ -380,8 +380,10 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
     key = HuWatermarkKey(
         embedding_indices=embedding_indices,
         embedding_positions=watermarked[embedding_indices].copy(),
+        # Base spatial scale for coordinate correspondence.  Extraction
+        # multiplies it by coordinate_distance_factor to obtain the threshold.
         matching_threshold=max(
-            0.75 * _nearest_neighbor_scale(watermarked), raw_extent * 1e-5
+            _nearest_neighbor_scale(watermarked), raw_extent * 1e-5
         ),
         bit_indices=bit_indices,
         repetitions=reps,
@@ -430,21 +432,74 @@ def _greedy_unique_match(reference, candidate, distance_threshold, neighbors=16)
     return matched, matched_distances
 
 
-def _match_embedding_positions(vertices, key):
-    """論文で保存する埋め込み極値位置から対応頂点を取得する。"""
-    indices, _ = _greedy_unique_match(
-        key.embedding_positions,
-        vertices,
-        key.matching_threshold,
+def _match_embedding_positions(
+    vertices,
+    triangles,
+    imf1,
+    key,
+    coordinate_distance_factor,
+    neighbors=16,
+):
+    """保存キャリアを再検出した安定極値点へ一対一対応させる。
+
+    Huらは埋め込みprimitiveを保存するとしているが、具体的な対応アルゴリズムは
+    規定していない。ここでは安定極値点だけを候補とし、点間隔基準のしきい値内の
+    辺を距離順にgreedy選択する。対応できないキャリアは欠損として返す。
+    """
+    if coordinate_distance_factor <= 0:
+        raise ValueError("coordinate_distance_factor must be positive.")
+
+    max_idx, min_idx = find_stable_extreme_points_mesh(
+        triangles,
+        imf1,
+        t=key.extreme_parameter,
+        epsilon=key.epsilon,
     )
-    valid = indices >= 0
-    return np.asarray(indices, dtype=np.int64), np.asarray(valid, dtype=bool)
+    candidate_indices = np.concatenate((max_idx, min_idx))
+    if len(candidate_indices):
+        candidate_indices = np.unique(candidate_indices)
+
+    local_indices, distances = _greedy_unique_match(
+        key.embedding_positions,
+        vertices[candidate_indices],
+        key.matching_threshold * coordinate_distance_factor,
+        neighbors=neighbors,
+    )
+    matched = np.full(len(key.embedding_positions), -1, dtype=np.int64)
+    valid = local_indices >= 0
+    matched[valid] = candidate_indices[local_indices[valid]]
+    return matched, valid, distances, len(candidate_indices)
 
 
-def extract_watermark_hu_mesh(vertices, triangles, key_info):
-    """論文 Algorithm 2、式 (12)、式 (13) に基づいて透かしを抽出する。"""
+def extract_watermark_hu_mesh(
+    vertices,
+    triangles,
+    key_info,
+    correspondence_mode="auto",
+    coordinate_distance_factor=5.0,
+    coordinate_neighbors=16,
+    verbose=False,
+):
+    """論文 Algorithm 2、式 (12)、式 (13) に基づいて透かしを抽出する。
+
+    ``coordinate`` は保存した埋め込み極値座標と、攻撃後に再検出した安定極値を
+    距離制約付きで一対一対応させる。両モデルは同一座標系にregistration済みで
+    あることを前提とする。``index`` は比較実験用であり、論文のindex-freeという
+    主張を再現する場合は ``coordinate`` を使用する。
+    """
     if not isinstance(key_info, HuWatermarkKey):
         raise TypeError("key_info must be the HuWatermarkKey returned by embed_watermark_hu_mesh.")
+    if correspondence_mode not in {"auto", "index", "coordinate"}:
+        raise ValueError(
+            "correspondence_mode must be 'auto', 'index', or 'coordinate'."
+        )
+    if coordinate_distance_factor <= 0:
+        raise ValueError("coordinate_distance_factor must be positive.")
+    if (
+        not isinstance(coordinate_neighbors, (int, np.integer))
+        or coordinate_neighbors < 1
+    ):
+        raise ValueError("coordinate_neighbors must be a positive integer.")
     attacked_vertex_count = len(vertices)
     attacked_triangles = np.asarray(triangles, dtype=np.int64)
     original_vertex_count = (
@@ -463,16 +518,49 @@ def extract_watermark_hu_mesh(vertices, triangles, key_info):
     if rho_max <= 1e-15:
         raise ValueError("全頂点が同一点のため、抽出できません。")
     imf1, _ = surface_emd_sifting(vertices, triangles, rho / rho_max, t=key_info.extreme_parameter)
-    if preserves_original_vertices:
-        # 論文 Algorithm 2 では、類似変換攻撃の場合だけ保存極値との
-        # registration を行う。ノイズやスムージングのように元の頂点集合を
-        # 保つ攻撃では、埋め込み時に記録した極値位置をそのまま参照する。
+    use_index = correspondence_mode == "index" or (
+        correspondence_mode == "auto" and preserves_original_vertices
+    )
+    if use_index:
+        if attacked_vertex_count != original_vertex_count:
+            raise ValueError(
+                "index correspondence requires the original vertex count."
+            )
+        # 比較実験用のindex対応。Huらの論文が主張するindex-free抽出を
+        # 再現する場合はcoordinateを明示的に指定する。
         matched = np.asarray(key_info.embedding_indices, dtype=np.int64)
         valid_carriers = (matched >= 0) & (matched < len(vertices))
+        if verbose:
+            print(
+                f"[Hu] correspondence=index, "
+                f"matched={np.count_nonzero(valid_carriers)}/{len(matched)}"
+            )
     else:
-        # 接続情報を失う独自の切り取り・ダウンサンプリング評価では、
-        # 再構築後メッシュに頂点番号を引き継げないため保存極値座標を使う。
-        matched, valid_carriers = _match_embedding_positions(vertices, key_info)
+        # 保存極値座標と攻撃後に再検出した安定極値だけを疎に対応付ける。
+        matched, valid_carriers, matched_distances, candidate_count = (
+            _match_embedding_positions(
+                vertices,
+                triangles,
+                imf1,
+                key_info,
+                coordinate_distance_factor=coordinate_distance_factor,
+                neighbors=int(coordinate_neighbors),
+            )
+        )
+        if verbose:
+            valid_distances = matched_distances[valid_carriers]
+            median_distance = (
+                float(np.median(valid_distances))
+                if len(valid_distances)
+                else float("nan")
+            )
+            print(
+                f"[Hu] correspondence=coordinate, "
+                f"stable_extrema={candidate_count}, "
+                f"matched={np.count_nonzero(valid_carriers)}/{len(matched)}, "
+                f"threshold={key_info.matching_threshold * coordinate_distance_factor:.6g}, "
+                f"median_distance={median_distance:.6g}"
+            )
 
     wm_len = key_info.watermark_size ** 2
     vote_count = np.zeros(wm_len, dtype=np.int64)

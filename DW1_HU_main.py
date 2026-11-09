@@ -21,13 +21,15 @@ if __name__ == "__main__":
     fide_p = 52.5
     # 円状埋め込み回数 (論文推奨: 25 [Source 9: Sect 5.1.3])
     T_rep = 25
+    correspondence_mode = "coordinate"  # "auto", "index", or "coordinate"
+    hu_coordinate_distance_factor = 5.0
     show = True
     
     # ======================
     # 1. データ取得
     image_path = "watermark16.bmp"
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
@@ -74,7 +76,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.0, mode='gaussian', seed=42)
     
     # OP. スムージング攻撃 (論文ではLaplacian smoothingを検証 [Source 9: Sect 5.3.2])
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=1.0, iterations=100)
+    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.5, iterations=30)
 
     # OP. 切り取り攻撃
     # xyz_after, triangles_after = DW2F.cropping_attack(
@@ -94,7 +96,12 @@ if __name__ == "__main__":
     # 5. 抽出処理
     start_extract = time.time()
     extracted_bits = DW1HU.extract_watermark_hu_mesh(
-        xyz_after, triangles_after, key_info
+        xyz_after,
+        triangles_after,
+        key_info,
+        correspondence_mode=correspondence_mode,
+        coordinate_distance_factor=hu_coordinate_distance_factor,
+        verbose=True,
     )
     extract_time = time.time() - start_extract
     

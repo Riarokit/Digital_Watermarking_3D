@@ -33,8 +33,11 @@ if __name__ == "__main__":
     radius = 0.03
     # 点群対応付け設定
     index_distance_factor = 30.0           # 同一インデックス対応の許容距離倍率
-    coordinate_distance_factor = 30.0       # 座標最近傍対応の許容距離倍率
+    coordinate_distance_factor = 5.0      # 座標・曲面対応の許容距離倍率
     max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
+    correspondence_mode = "surface"       # "auto", "index", "coordinate", "surface"
+    surface_neighbors = 12                # 局所曲面回帰に使う攻撃後点数
+    surface_max_missing_ratio = 0.1       # クラスタ内補間を許す欠損率
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化
@@ -121,6 +124,9 @@ if __name__ == "__main__":
         index_distance_factor=index_distance_factor,
         coordinate_distance_factor=coordinate_distance_factor,
         max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+        correspondence_mode=correspondence_mode,
+        surface_neighbors=surface_neighbors,
+        surface_max_missing_ratio=surface_max_missing_ratio,
     )
     extract_time = time.time() - start
 
