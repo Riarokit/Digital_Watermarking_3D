@@ -21,8 +21,8 @@ INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
-NUM_EMBEDDING_TRIALS = 5
-NUM_ATTACK_TRIALS = 5
+NUM_EMBEDDING_TRIALS = 3
+NUM_ATTACK_TRIALS = 3
 EMBEDDING_SEED_BASE = 42
 ATTACK_SEED_BASE = 42
 VERBOSE_TRIAL_LOGS = False
@@ -37,11 +37,11 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [0.2, 0.5, 0.8, 1.0]),
-    ("smoothing", [10, 20, 30]),
+    ("noise", [1.0]),
+    ("smoothing", [50]),
     # ("cropping", [0.7, 0.5, 0.3]),
     # ("reordering", [0.1, 0.5, 1.0]),
-    # ("downsampling", [0.8, 1.0, 1.2]),
+    ("downsampling", [1.0]),
     # ("visual_quality", [None]),
 ]
 
@@ -57,10 +57,11 @@ DOWNSAMPLING_MODE = "voxel"
 GRAPH_MODE = "knn"
 KNN_K = 24
 GRAPH_RADIUS = 0.03
-PROPOSED_CORRESPONDENCE_MODE = "surface"  # auto, index, coordinate, or surface
+PROPOSED_CORRESPONDENCE_MODE = "cluster-1to1"  # auto, index, coordinate, surface, or cluster-1to1
 PROPOSED_INDEX_DISTANCE_FACTOR = 30.0
-PROPOSED_COORDINATE_DISTANCE_FACTOR = 5.0
+PROPOSED_COORDINATE_DISTANCE_FACTOR = 30.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
+PROPOSED_CLUSTER_MATCH_CANDIDATES = (8, 16, 32, 64, 128)
 PROPOSED_SURFACE_NEIGHBORS = 12
 PROPOSED_SURFACE_MAX_MISSING_RATIO = 0.1
 FLATNESS_WEIGHTING = 0
@@ -70,7 +71,11 @@ BANDS = [
     ("All", 0.0, 1.0, 1.6e-3),
     ("Low", 0.0, 0.2, 3.6e-3),
     ("High", 0.8, 1.0, 3.6e-3),
+    ("DualBand", None, None, None),
 ]
+DUAL_BAND_LOW_RANGE = (0.0, 0.2)
+DUAL_BAND_HIGH_RANGE = (0.6, 1.0)
+DUAL_BAND_LOW_ENERGY_SHARE = 0.30
 
 # Hu手法
 HU_INITIAL_FIDEP = 53.0
@@ -458,14 +463,16 @@ def prepare_methods(
                 "[Proposed] 各クラスタを一度だけ固有値分解し、"
                 "全周波数帯の変位を一括計算します..."
             )
+            single_band_specs = [
+                (band, min_spectrum, max_spectrum)
+                for band, min_spectrum, max_spectrum, _ in BANDS
+                if band != "DualBand"
+            ]
             band_displacements = DW1X1.prepare_watermark_x1_band_displacements(
                 vertices,
                 labels,
                 bits,
-                [
-                    (band, min_spectrum, max_spectrum)
-                    for band, min_spectrum, max_spectrum, _ in BANDS
-                ],
+                single_band_specs,
                 graph_mode=GRAPH_MODE,
                 k=KNN_K,
                 radius=GRAPH_RADIUS,
@@ -474,6 +481,100 @@ def prepare_methods(
             )
             for band, min_spectrum, max_spectrum, _initial_beta in BANDS:
                 name = f"P-{band}({cluster_points})"
+                if band == "DualBand":
+                    dualband_displacement = (
+                        DW1X1.prepare_watermark_x1_dualband_displacement(
+                            vertices,
+                            labels,
+                            bits,
+                            graph_mode=GRAPH_MODE,
+                            k=KNN_K,
+                            radius=GRAPH_RADIUS,
+                            flatness_weighting=FLATNESS_WEIGHTING,
+                            k_neighbors=K_NEIGHBORS,
+                            low_band=DUAL_BAND_LOW_RANGE,
+                            high_band=DUAL_BAND_HIGH_RANGE,
+                            low_energy_share=DUAL_BAND_LOW_ENERGY_SHARE,
+                        )
+                    )
+                    marked, embedding_strength = match_linear_displacement(
+                        vertices,
+                        dualband_displacement,
+                        target_mse,
+                        name,
+                    )
+                    # This fixed alternating reference is payload-independent.
+                    # It gives the geometry-only gate the expected normal
+                    # variation of a marked cloud without spending payload or
+                    # distortion energy on a pilot.
+                    virtual_bits = (
+                        np.arange(len(bits), dtype=np.int64) % 2
+                    ).astype(np.uint8)
+                    virtual_displacement = (
+                        DW1X1.prepare_watermark_x1_dualband_displacement(
+                            vertices,
+                            labels,
+                            virtual_bits,
+                            graph_mode=GRAPH_MODE,
+                            k=KNN_K,
+                            radius=GRAPH_RADIUS,
+                            flatness_weighting=FLATNESS_WEIGHTING,
+                            k_neighbors=K_NEIGHBORS,
+                            low_band=DUAL_BAND_LOW_RANGE,
+                            high_band=DUAL_BAND_HIGH_RANGE,
+                            low_energy_share=DUAL_BAND_LOW_ENERGY_SHARE,
+                        )
+                    )
+                    virtual_marked = (
+                        vertices + embedding_strength * virtual_displacement
+                    )
+                    attack_reference_feature = DW1X1.dualband_geometry_feature(
+                        virtual_marked
+                    )
+                    methods[name] = {
+                        "vertices": marked,
+                        "triangles": triangles,
+                        "extract": (
+                            lambda attacked, _attacked_triangles, lab=labels,
+                            feature=attack_reference_feature: (
+                                DW1X1.extract_watermark_x1_dualband(
+                                    attacked,
+                                    vertices,
+                                    lab,
+                                    len(bits),
+                                    graph_mode=GRAPH_MODE,
+                                    k=KNN_K,
+                                    radius=GRAPH_RADIUS,
+                                    index_distance_factor=(
+                                        PROPOSED_INDEX_DISTANCE_FACTOR
+                                    ),
+                                    coordinate_distance_factor=(
+                                        PROPOSED_COORDINATE_DISTANCE_FACTOR
+                                    ),
+                                    max_index_inconsistency_ratio=(
+                                        PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO
+                                    ),
+                                    correspondence_mode=(
+                                        PROPOSED_CORRESPONDENCE_MODE
+                                    ),
+                                    cluster_match_candidates=(
+                                        PROPOSED_CLUSTER_MATCH_CANDIDATES
+                                    ),
+                                    surface_neighbors=(
+                                        PROPOSED_SURFACE_NEIGHBORS
+                                    ),
+                                    surface_max_missing_ratio=(
+                                        PROPOSED_SURFACE_MAX_MISSING_RATIO
+                                    ),
+                                    low_band=DUAL_BAND_LOW_RANGE,
+                                    high_band=DUAL_BAND_HIGH_RANGE,
+                                    attack_reference_feature=feature,
+                                )
+                            )
+                        ),
+                    }
+                    newly_prepared.append(name)
+                    continue
                 marked, _ = match_linear_displacement(
                     vertices,
                     band_displacements[band],
@@ -507,6 +608,9 @@ def prepare_methods(
                                 ),
                                 correspondence_mode=(
                                     PROPOSED_CORRESPONDENCE_MODE
+                                ),
+                                cluster_match_candidates=(
+                                    PROPOSED_CLUSTER_MATCH_CANDIDATES
                                 ),
                                 surface_neighbors=(
                                     PROPOSED_SURFACE_NEIGHBORS

@@ -1,5 +1,7 @@
 import numpy as np
 import open3d as o3d
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.spatial import cKDTree
 from sklearn.cluster import KMeans
 import DW2_func as DW2F
@@ -36,6 +38,14 @@ def _detect_gft_gpu():
 
 _GFT_GPU_AVAILABLE, _GFT_BACKEND_DETAIL = _detect_gft_gpu()
 _GFT_BACKEND_REPORTED = False
+
+# DualBand watermark / correspondence defaults.  The code key defines the
+# deterministic spread chips and is not related to input point order.
+DUAL_BAND_CODE_KEY = 20261116
+DUAL_BAND_LOW_RANGE = (0.0, 0.2)
+DUAL_BAND_HIGH_RANGE = (0.6, 1.0)
+DUAL_BAND_LOW_ENERGY_SHARE = 0.30
+CLUSTER_ONE_TO_ONE_CANDIDATES = (8, 16, 32, 64, 128)
 
 # =========================================================
 #  クラスタリング関数群
@@ -680,6 +690,132 @@ def prepare_watermark_x1_band_displacements(
 
     return displacements
 
+
+def _dual_band_balanced_chips(length, rng):
+    """Return a deterministic, nearly balanced +/-1 chip sequence."""
+    chips = np.ones(length, dtype=np.float64)
+    chips[: length // 2] = -1.0
+    rng.shuffle(chips)
+    return chips
+
+
+def _dual_band_layout(cluster_id, point_count, bit_length, band, band_id, code_key):
+    start = int(point_count * band[0])
+    end = int(point_count * band[1])
+    count = end - start
+    if count <= 0:
+        raise ValueError(f"DualBand has an empty GFT band: {band}.")
+    rng = np.random.RandomState(
+        int(code_key) + 1009 * int(cluster_id) + 97 * int(band_id)
+    )
+    bit_index = np.arange(count, dtype=np.int64) % int(bit_length)
+    rng.shuffle(bit_index)
+    return {
+        "start": start,
+        "end": end,
+        "bit_index": bit_index,
+        "chips": _dual_band_balanced_chips(count, rng),
+    }
+
+
+def _dual_band_layouts(cluster_id, point_count, bit_length, low_band, high_band, code_key):
+    return {
+        "Low": _dual_band_layout(
+            cluster_id, point_count, bit_length, low_band, 0, code_key
+        ),
+        "High": _dual_band_layout(
+            cluster_id, point_count, bit_length, high_band, 1, code_key
+        ),
+    }
+
+
+def prepare_watermark_x1_dualband_displacement(
+    xyz,
+    labels,
+    embed_bits,
+    graph_mode="knn",
+    k=10,
+    radius=0.05,
+    flatness_weighting=0,
+    k_neighbors=20,
+    small_cluster_policy="half_watermark",
+    low_band=DUAL_BAND_LOW_RANGE,
+    high_band=DUAL_BAND_HIGH_RANGE,
+    low_energy_share=DUAL_BAND_LOW_ENERGY_SHARE,
+    code_key=DUAL_BAND_CODE_KEY,
+):
+    """Build the unit displacement for the proposed ``DualBand`` method.
+
+    Low (default 0--20%) and High (default 60--100%) GFT regions use separate
+    deterministic spread codes.  Each region is RMS-normalized before mixing,
+    so ``low_energy_share=0.30`` gives 30% / 70% displacement energy while the
+    caller remains free to set the final global MSE/PSNR.
+    """
+    xyz = np.asarray(xyz, dtype=np.float64)
+    labels = np.asarray(labels)
+    bits = np.asarray(embed_bits, dtype=np.uint8).ravel()
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError("xyz must have shape (N, 3).")
+    if labels.shape != (len(xyz),):
+        raise ValueError("labels must have one entry per point.")
+    if len(bits) == 0:
+        return np.zeros_like(xyz)
+    if not 0.0 <= low_energy_share <= 1.0:
+        raise ValueError("low_energy_share must be in [0, 1].")
+    for name, band in (("low_band", low_band), ("high_band", high_band)):
+        if len(band) != 2 or not 0.0 <= band[0] < band[1] <= 1.0:
+            raise ValueError(f"{name} must satisfy 0 <= start < end <= 1.")
+
+    cluster_ids = np.unique(labels)
+    if flatness_weighting == 0:
+        weights = {cluster_id: 1.0 for cluster_id in cluster_ids}
+    else:
+        flatness = estimate_cluster_flatness(
+            xyz, labels, k_neighbors=k_neighbors
+        )
+        weights = compute_cluster_weights(flatness, flatness_weighting)
+
+    phi = float(np.max(np.ptp(xyz, axis=0)))
+    signs = bits.astype(np.float64) * 2.0 - 1.0
+    units = {"Low": np.zeros_like(xyz), "High": np.zeros_like(xyz)}
+    small_cluster_size_limit = _small_cluster_size_limit(
+        len(bits), small_cluster_policy
+    )
+    for cluster_id in cluster_ids:
+        index = np.flatnonzero(labels == cluster_id)
+        if len(index) <= small_cluster_size_limit:
+            continue
+        points = xyz[index]
+        _, normal = compute_pseudoplane_pca(points)
+        basis, _ = gft_basis_auto(
+            build_graph(points, graph_mode=graph_mode, k=k, radius=radius)
+        )
+        layouts = _dual_band_layouts(
+            cluster_id, len(index), len(bits), low_band, high_band, code_key
+        )
+        cluster_weight = weights.get(cluster_id, 1.0)
+        for name, layout in layouts.items():
+            coefficient_changes = np.zeros(len(index), dtype=np.float64)
+            coefficient_changes[layout["start"]:layout["end"]] = (
+                phi
+                * cluster_weight
+                * signs[layout["bit_index"]]
+                * layout["chips"]
+            )
+            units[name][index] = (
+                basis @ coefficient_changes
+            )[:, None] * normal[None, :]
+
+    pieces = []
+    for name, share in (("Low", low_energy_share), ("High", 1.0 - low_energy_share)):
+        if share <= 0.0:
+            continue
+        rms = float(np.sqrt(np.mean(np.sum(units[name] ** 2, axis=1))))
+        if not np.isfinite(rms) or rms <= 0.0:
+            raise RuntimeError(f"DualBand {name} produced zero displacement.")
+        pieces.append(np.sqrt(share) * units[name] / rms)
+    return np.sum(pieces, axis=0)
+
 def embed_watermark_x1(
     xyz: np.ndarray,
     labels: np.ndarray,
@@ -834,6 +970,154 @@ def match_point_cloud_to_original(
             f"unmatched={np.count_nonzero(~valid)} / {len(xyz_orig)}"
         )
     return matched, valid, distances, float(distance_threshold)
+
+
+def match_point_cloud_cluster_one_to_one(
+    xyz_att,
+    xyz_orig,
+    labels,
+    distance_factor=30.0,
+    candidate_counts=CLUSTER_ONE_TO_ONE_CANDIDATES,
+    verbose=True,
+):
+    """Geometry-only local one-to-one correspondence for equal-size clouds.
+
+    Each original GFT cluster builds sparse edges to its nearest received-point
+    candidates and solves a minimum-total-squared-distance bipartite matching.
+    The input PCD row order is never read.  If cardinality differs, the caller
+    must use ordinary coordinate many-to-one resampling instead.
+    """
+    xyz_att = np.asarray(xyz_att, dtype=np.float64)
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    labels = np.asarray(labels)
+    if xyz_att.shape != xyz_orig.shape or xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
+        raise ValueError("cluster-1to1 correspondence requires equal (N, 3) arrays.")
+    if labels.shape != (len(xyz_orig),):
+        raise ValueError("labels must have one entry per original point.")
+    if len(xyz_att) < 2:
+        raise ValueError("cluster-1to1 correspondence requires at least two points.")
+    if distance_factor <= 0:
+        raise ValueError("distance_factor must be positive.")
+
+    candidate_counts = tuple(int(value) for value in candidate_counts)
+    if not candidate_counts or any(value <= 0 for value in candidate_counts):
+        raise ValueError("candidate_counts must contain positive integers.")
+    tree = cKDTree(xyz_att)
+    output = np.full(len(xyz_orig), -1, dtype=np.int64)
+    maximum_candidates = 0
+    for cluster_id in np.unique(labels):
+        rows = np.flatnonzero(labels == cluster_id)
+        for requested_count in candidate_counts:
+            candidate_count = min(requested_count, len(xyz_att))
+            distances, candidate_global = tree.query(
+                xyz_orig[rows], k=candidate_count
+            )
+            if candidate_count == 1:
+                distances = distances[:, None]
+                candidate_global = candidate_global[:, None]
+            candidates = np.unique(candidate_global)
+            if len(candidates) < len(rows):
+                continue
+            graph = csr_matrix(
+                (
+                    np.maximum(distances.ravel() ** 2, 1e-15),
+                    (
+                        np.repeat(
+                            np.arange(len(rows), dtype=np.int64), candidate_count
+                        ),
+                        np.searchsorted(candidates, candidate_global).ravel(),
+                    ),
+                ),
+                shape=(len(rows), len(candidates)),
+            )
+            try:
+                local_rows, local_columns = min_weight_full_bipartite_matching(graph)
+            except ValueError:
+                continue
+            if len(local_rows) != len(rows):
+                continue
+            assigned = np.empty(len(rows), dtype=np.int64)
+            assigned[local_rows] = candidates[local_columns]
+            output[rows] = assigned
+            maximum_candidates = max(maximum_candidates, candidate_count)
+            break
+        else:
+            raise RuntimeError(
+                f"cluster-1to1 could not match original cluster {cluster_id}."
+            )
+
+    neighbor_distances = tree.query(xyz_att, k=2)[0][:, 1]
+    spacing = neighbor_distances[
+        np.isfinite(neighbor_distances) & (neighbor_distances > 1e-12)
+    ]
+    if len(spacing) == 0:
+        raise ValueError("Cannot estimate spacing from received points.")
+    threshold = float(distance_factor * np.median(spacing))
+    matched = xyz_att[output].copy()
+    distances = np.linalg.norm(matched - xyz_orig, axis=1)
+    valid = np.isfinite(distances) & (distances <= threshold)
+    matched[~valid] = np.nan
+    if verbose:
+        unique_ratio = len(np.unique(output)) / len(output)
+        print(
+            f"[Cluster1to1] threshold={threshold:.6e}, "
+            f"unmatched={np.count_nonzero(~valid)} / {len(xyz_orig)}, "
+            f"global_unique={unique_ratio:.2%}, "
+            f"max_candidates={maximum_candidates}"
+        )
+    return matched, valid, distances, threshold
+
+
+def dualband_geometry_feature(points, normal_neighbors=24, normal_compare=6):
+    """Order-invariant point-count and local-normal-variation feature."""
+    points = np.asarray(points, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 3 or len(points) < 3:
+        raise ValueError("points must have at least three rows of xyz coordinates.")
+    neighbor_count = min(int(normal_neighbors), len(points) - 1)
+    compare_count = min(int(normal_compare), neighbor_count)
+    if neighbor_count < 2 or compare_count < 1:
+        raise ValueError("Not enough points for the DualBand geometry feature.")
+    indices = cKDTree(points).query(points, k=neighbor_count + 1)[1]
+    neighbors = points[indices[:, 1:]]
+    centered = neighbors - np.mean(neighbors, axis=1, keepdims=True)
+    covariance = np.einsum(
+        "nki,nkj->nij", centered, centered, optimize=True
+    ) / neighbor_count
+    _, eigenvectors = np.linalg.eigh(covariance)
+    normals = eigenvectors[:, :, 0]
+    dot_products = np.sum(
+        normals[:, None, :] * normals[indices[:, 1:compare_count + 1]], axis=2
+    )
+    return {
+        "count": len(points),
+        "normal_variation": float(np.median(1.0 - np.abs(dot_products))),
+    }
+
+
+def classify_dualband_attack(
+    attacked_points,
+    reference_feature,
+    downsample_count_threshold=0.95,
+    noise_normal_variation_threshold=1.50,
+    smoothing_normal_variation_threshold=0.80,
+):
+    """Choose a DualBand decoder rule from geometry only, not watermark bits."""
+    if reference_feature is None:
+        return "neutral", float("nan"), float("nan")
+    value = dualband_geometry_feature(attacked_points)
+    count_ratio = value["count"] / max(float(reference_feature["count"]), 1.0)
+    normal_ratio = value["normal_variation"] / max(
+        float(reference_feature["normal_variation"]), 1e-15
+    )
+    if count_ratio < downsample_count_threshold:
+        label = "downsampling"
+    elif normal_ratio > noise_normal_variation_threshold:
+        label = "noise"
+    elif normal_ratio < smoothing_normal_variation_threshold:
+        label = "smoothing"
+    else:
+        label = "neutral"
+    return label, count_ratio, normal_ratio
 
 
 def _surface_tangent_basis(normal):
@@ -1099,6 +1383,8 @@ def align_attacked_vertices_to_original(
     coordinate_distance_factor=2.0,
     max_index_inconsistency_ratio=0.01,
     correspondence_mode="auto",
+    labels=None,
+    cluster_match_candidates=CLUSTER_ONE_TO_ONE_CANDIDATES,
     verbose=True,
 ):
     """Align attacked vertices to original-vertex order using X1 matching.
@@ -1109,12 +1395,46 @@ def align_attacked_vertices_to_original(
     requires equal array shapes. The returned mask identifies original vertices
     with a match inside the common distance threshold.
     """
-    if correspondence_mode not in {"auto", "index", "coordinate"}:
+    if correspondence_mode not in {"auto", "index", "coordinate", "cluster-1to1"}:
         raise ValueError(
-            "correspondence_mode must be 'auto', 'index', or 'coordinate'."
+            "correspondence_mode must be 'auto', 'index', 'coordinate', or "
+            "'cluster-1to1'."
         )
     attacked_vertices = np.asarray(attacked_vertices, dtype=float)
     original_vertices = np.asarray(original_vertices, dtype=float)
+    if correspondence_mode == "cluster-1to1":
+        if labels is None:
+            raise ValueError("cluster-1to1 correspondence requires original labels.")
+        if len(attacked_vertices) == len(original_vertices):
+            try:
+                aligned, matched_mask, _, _ = match_point_cloud_cluster_one_to_one(
+                    attacked_vertices,
+                    original_vertices,
+                    labels,
+                    distance_factor=coordinate_distance_factor,
+                    candidate_counts=cluster_match_candidates,
+                    verbose=verbose,
+                )
+                return aligned, matched_mask
+            except (RuntimeError, ValueError) as exc:
+                if verbose:
+                    print(
+                        "[Cluster1to1] matching failed; falling back to "
+                        f"coordinate many-to-one ({exc})"
+                    )
+        elif verbose:
+            print(
+                f"[Cluster1to1] vertex count changed: {len(original_vertices)} -> "
+                f"{len(attacked_vertices)}; correspondence=coordinate fallback"
+            )
+        aligned_vertices, matched_vertex_mask, _, _ = match_point_cloud_to_original(
+            attacked_vertices,
+            original_vertices,
+            distance_factor=coordinate_distance_factor,
+            verbose=verbose,
+        )
+        return aligned_vertices, matched_vertex_mask
+
     use_index = correspondence_mode == "index" or (
         correspondence_mode == "auto"
         and attacked_vertices.shape == original_vertices.shape
@@ -1166,6 +1486,7 @@ def extract_watermark_x1(
     coordinate_distance_factor: float = 2.0,
     max_index_inconsistency_ratio: float = 0.01,
     correspondence_mode: str = "auto",
+    cluster_match_candidates=CLUSTER_ONE_TO_ONE_CANDIDATES,
     surface_neighbors: int = 12,
     surface_max_missing_ratio: float = 0.1,
 ):
@@ -1202,6 +1523,8 @@ def extract_watermark_x1(
                 coordinate_distance_factor=coordinate_distance_factor,
                 max_index_inconsistency_ratio=max_index_inconsistency_ratio,
                 correspondence_mode=correspondence_mode,
+                labels=labels,
+                cluster_match_candidates=cluster_match_candidates,
                 verbose=True,
             )
         )
@@ -1279,3 +1602,123 @@ def extract_watermark_x1(
             extracted_bits.append(1 if ones > zeros else 0)
 
     return extracted_bits
+
+
+def extract_watermark_x1_dualband(
+    xyz_emb,
+    xyz_orig,
+    labels,
+    embed_bits_length,
+    graph_mode="knn",
+    k=12,
+    radius=0.05,
+    small_cluster_policy="half_watermark",
+    index_distance_factor=20.0,
+    coordinate_distance_factor=2.0,
+    max_index_inconsistency_ratio=0.01,
+    correspondence_mode="cluster-1to1",
+    cluster_match_candidates=CLUSTER_ONE_TO_ONE_CANDIDATES,
+    surface_neighbors=12,
+    surface_max_missing_ratio=0.1,
+    low_band=DUAL_BAND_LOW_RANGE,
+    high_band=DUAL_BAND_HIGH_RANGE,
+    code_key=DUAL_BAND_CODE_KEY,
+    attack_reference_feature=None,
+):
+    """Extract the ``DualBand`` spread watermark without using PCD row order.
+
+    Low and High correlation scores are independently normalized.  Geometry
+    alone selects ``Low + 0.5 High`` for noise, High for smoothing, Low for
+    point-count reduction, and an equal normalized fusion otherwise.
+    """
+    xyz_emb = np.asarray(xyz_emb, dtype=np.float64)
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    labels = np.asarray(labels)
+    if xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
+        raise ValueError("xyz_orig must have shape (N, 3).")
+    if labels.shape != (len(xyz_orig),):
+        raise ValueError("labels must have one entry per original point.")
+    if embed_bits_length <= 0:
+        return []
+
+    if correspondence_mode == "surface":
+        aligned_vertices, matched_vertex_mask = resample_attacked_surface_to_original(
+            xyz_emb,
+            xyz_orig,
+            labels,
+            distance_factor=coordinate_distance_factor,
+            neighbors=surface_neighbors,
+            max_missing_ratio=surface_max_missing_ratio,
+            verbose=True,
+        )
+    else:
+        aligned_vertices, matched_vertex_mask = align_attacked_vertices_to_original(
+            xyz_emb,
+            xyz_orig,
+            index_distance_factor=index_distance_factor,
+            coordinate_distance_factor=coordinate_distance_factor,
+            max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+            correspondence_mode=correspondence_mode,
+            labels=labels,
+            cluster_match_candidates=cluster_match_candidates,
+            verbose=True,
+        )
+
+    low_scores = np.zeros(embed_bits_length, dtype=np.float64)
+    high_scores = np.zeros(embed_bits_length, dtype=np.float64)
+    small_cluster_size_limit = _small_cluster_size_limit(
+        embed_bits_length, small_cluster_policy
+    )
+    for cluster_id in np.unique(labels):
+        index = np.flatnonzero(labels == cluster_id)
+        if len(index) <= small_cluster_size_limit:
+            continue
+        if not np.all(matched_vertex_mask[index]):
+            continue
+        original_points = xyz_orig[index]
+        attacked_points = aligned_vertices[index]
+        centroid, normal = compute_pseudoplane_pca(original_points)
+        original_height = cluster_height_signal(original_points, centroid, normal)
+        attacked_height = cluster_height_signal(attacked_points, centroid, normal)
+        coefficients, _ = gft_analyze_signals_auto(
+            build_graph(original_points, graph_mode=graph_mode, k=k, radius=radius),
+            np.column_stack((original_height, attacked_height)),
+        )
+        difference = coefficients[:, 1] - coefficients[:, 0]
+        layouts = _dual_band_layouts(
+            cluster_id,
+            len(index),
+            embed_bits_length,
+            low_band,
+            high_band,
+            code_key,
+        )
+        for name, scores in (("Low", low_scores), ("High", high_scores)):
+            layout = layouts[name]
+            np.add.at(
+                scores,
+                layout["bit_index"],
+                layout["chips"] * difference[layout["start"]:layout["end"]],
+            )
+
+    def normalize(scores):
+        return scores / max(float(np.median(np.abs(scores))), 1e-12)
+
+    label, count_ratio, normal_ratio = classify_dualband_attack(
+        xyz_emb, attack_reference_feature
+    )
+    low_scores = normalize(low_scores)
+    high_scores = normalize(high_scores)
+    if label == "noise":
+        scores, rule = low_scores + 0.5 * high_scores, "Low+0.5High"
+    elif label == "smoothing":
+        scores, rule = high_scores, "High"
+    elif label == "downsampling":
+        scores, rule = low_scores, "Low"
+    else:
+        scores, rule = low_scores + high_scores, "Low+High"
+    print(
+        f"[DualBand] attack={label}, rule={rule}, "
+        f"count_ratio={count_ratio:.4f}, normal_ratio={normal_ratio:.4f}"
+    )
+    return (scores > 0.0).astype(int).tolist()
