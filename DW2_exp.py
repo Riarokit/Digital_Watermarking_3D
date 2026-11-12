@@ -30,8 +30,8 @@ VERBOSE_TRIAL_LOGS = False
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    "ElZein",
-    "Hu",
+    # "ElZein",
+    # "Hu",
     # "Verma",
     "Proposed",
 ]
@@ -57,13 +57,14 @@ DOWNSAMPLING_MODE = "voxel"
 GRAPH_MODE = "knn"
 KNN_K = 24
 GRAPH_RADIUS = 0.03
-PROPOSED_CORRESPONDENCE_MODE = "cluster-1to1"  # auto, index, coordinate, surface, or cluster-1to1
+PROPOSED_CORRESPONDENCE_MODE = "1to1"
 PROPOSED_INDEX_DISTANCE_FACTOR = 30.0
 PROPOSED_COORDINATE_DISTANCE_FACTOR = 30.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
-PROPOSED_CLUSTER_MATCH_CANDIDATES = (8, 16, 32, 64, 128)
-PROPOSED_SURFACE_NEIGHBORS = 12
-PROPOSED_SURFACE_MAX_MISSING_RATIO = 0.1
+# Nearest-neighbor candidate counts tried successively by the assignment solver.
+PROPOSED_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
+# 0: auto (1 process below 100k original points, otherwise at most 4).
+PROPOSED_ONE_TO_ONE_WORKERS = 0
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]
@@ -85,10 +86,12 @@ HU_CORRESPONDENCE_MODE = "coordinate"  # auto, index, or coordinate
 HU_COORDINATE_DISTANCE_FACTOR = 30.0
 
 # El Zein手法
-ELZEIN_CORRESPONDENCE_MODE = "coordinate"  # auto, index, or coordinate
+ELZEIN_CORRESPONDENCE_MODE = "1to1"  # auto, index, coordinate, or 1to1
 ELZEIN_INDEX_DISTANCE_FACTOR = 30.0
 ELZEIN_COORDINATE_DISTANCE_FACTOR = 30.0
 ELZEIN_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
+ELZEIN_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
+ELZEIN_ONE_TO_ONE_WORKERS = 0
 ELZEIN_CLUSTER_POINTS = 400
 
 def point_cloud(vertices):
@@ -386,6 +389,8 @@ def prepare_methods(
                         ELZEIN_MAX_INDEX_INCONSISTENCY_RATIO
                     ),
                     correspondence_mode=ELZEIN_CORRESPONDENCE_MODE,
+                    one_to_one_candidates=ELZEIN_ONE_TO_ONE_CANDIDATES,
+                    one_to_one_workers=ELZEIN_ONE_TO_ONE_WORKERS,
                 )
             ),
         }
@@ -557,14 +562,11 @@ def prepare_methods(
                                     correspondence_mode=(
                                         PROPOSED_CORRESPONDENCE_MODE
                                     ),
-                                    cluster_match_candidates=(
-                                        PROPOSED_CLUSTER_MATCH_CANDIDATES
+                                    one_to_one_candidates=(
+                                        PROPOSED_ONE_TO_ONE_CANDIDATES
                                     ),
-                                    surface_neighbors=(
-                                        PROPOSED_SURFACE_NEIGHBORS
-                                    ),
-                                    surface_max_missing_ratio=(
-                                        PROPOSED_SURFACE_MAX_MISSING_RATIO
+                                    one_to_one_workers=(
+                                        PROPOSED_ONE_TO_ONE_WORKERS
                                     ),
                                     low_band=DUAL_BAND_LOW_RANGE,
                                     high_band=DUAL_BAND_HIGH_RANGE,
@@ -609,14 +611,11 @@ def prepare_methods(
                                 correspondence_mode=(
                                     PROPOSED_CORRESPONDENCE_MODE
                                 ),
-                                cluster_match_candidates=(
-                                    PROPOSED_CLUSTER_MATCH_CANDIDATES
+                                one_to_one_candidates=(
+                                    PROPOSED_ONE_TO_ONE_CANDIDATES
                                 ),
-                                surface_neighbors=(
-                                    PROPOSED_SURFACE_NEIGHBORS
-                                ),
-                                surface_max_missing_ratio=(
-                                    PROPOSED_SURFACE_MAX_MISSING_RATIO
+                                one_to_one_workers=(
+                                    PROPOSED_ONE_TO_ONE_WORKERS
                                 ),
                             )
                         )

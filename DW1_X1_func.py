@@ -1,5 +1,8 @@
 import numpy as np
 import open3d as o3d
+import os
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import min_weight_full_bipartite_matching
 from scipy.spatial import cKDTree
@@ -45,7 +48,12 @@ DUAL_BAND_CODE_KEY = 20261116
 DUAL_BAND_LOW_RANGE = (0.0, 0.2)
 DUAL_BAND_HIGH_RANGE = (0.6, 1.0)
 DUAL_BAND_LOW_ENERGY_SHARE = 0.30
-CLUSTER_ONE_TO_ONE_CANDIDATES = (8, 16, 32, 64, 128)
+ONE_TO_ONE_CANDIDATES = (8, 16, 32, 64, 128)
+ONE_TO_ONE_AUTO_WORKER_THRESHOLD = 100_000
+
+_ONE_TO_ONE_WORKER_TREE = None
+_ONE_TO_ONE_WORKER_ORIGINAL = None
+_ONE_TO_ONE_WORKER_CANDIDATES = None
 
 # =========================================================
 #  クラスタリング関数群
@@ -972,79 +980,193 @@ def match_point_cloud_to_original(
     return matched, valid, distances, float(distance_threshold)
 
 
-def match_point_cloud_cluster_one_to_one(
-    xyz_att,
-    xyz_orig,
-    labels,
-    distance_factor=30.0,
-    candidate_counts=CLUSTER_ONE_TO_ONE_CANDIDATES,
-    verbose=True,
+def _one_to_one_candidate_graph(distances, candidate_global):
+    """Build the sparse assignment graph for one candidate prefix."""
+    row_count, candidate_count = candidate_global.shape
+    candidates = np.unique(candidate_global)
+    if len(candidates) < row_count:
+        return None, None
+    graph = csr_matrix(
+        (
+            np.maximum(distances.ravel() ** 2, 1e-15),
+            (
+                np.repeat(np.arange(row_count, dtype=np.int64), candidate_count),
+                np.searchsorted(candidates, candidate_global).ravel(),
+            ),
+        ),
+        shape=(row_count, len(candidates)),
+    )
+    return graph, candidates
+
+
+def _solve_one_to_one_cluster(
+    tree, xyz_orig, cluster_id, rows, candidate_counts
 ):
-    """Geometry-only local one-to-one correspondence for equal-size clouds.
-
-    Each original GFT cluster builds sparse edges to its nearest received-point
-    candidates and solves a minimum-total-squared-distance bipartite matching.
-    The input PCD row order is never read.  If cardinality differs, the caller
-    must use ordinary coordinate many-to-one resampling instead.
-    """
-    xyz_att = np.asarray(xyz_att, dtype=np.float64)
-    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
-    labels = np.asarray(labels)
-    if xyz_att.shape != xyz_orig.shape or xyz_orig.ndim != 2 or xyz_orig.shape[1] != 3:
-        raise ValueError("cluster-1to1 correspondence requires equal (N, 3) arrays.")
-    if labels.shape != (len(xyz_orig),):
-        raise ValueError("labels must have one entry per original point.")
-    if len(xyz_att) < 2:
-        raise ValueError("cluster-1to1 correspondence requires at least two points.")
-    if distance_factor <= 0:
-        raise ValueError("distance_factor must be positive.")
-
-    candidate_counts = tuple(int(value) for value in candidate_counts)
-    if not candidate_counts or any(value <= 0 for value in candidate_counts):
-        raise ValueError("candidate_counts must contain positive integers.")
-    tree = cKDTree(xyz_att)
-    output = np.full(len(xyz_orig), -1, dtype=np.int64)
-    maximum_candidates = 0
-    for cluster_id in np.unique(labels):
-        rows = np.flatnonzero(labels == cluster_id)
-        for requested_count in candidate_counts:
-            candidate_count = min(requested_count, len(xyz_att))
-            distances, candidate_global = tree.query(
-                xyz_orig[rows], k=candidate_count
+    """Solve one local bijection without changing the candidate objective."""
+    # Reuse each KD query for its candidate prefixes.  This preserves the fixed
+    # 8,16,32,64,128 schedule while avoiding five independent neighbor queries.
+    stages = (
+        tuple(value for value in candidate_counts if value <= 16),
+        tuple(value for value in candidate_counts if value > 16),
+    )
+    for stage in stages:
+        if not stage:
+            continue
+        maximum = min(max(stage), tree.n)
+        distances_all, candidates_all = tree.query(xyz_orig[rows], k=maximum)
+        if maximum == 1:
+            distances_all = distances_all[:, None]
+            candidates_all = candidates_all[:, None]
+        for requested_count in stage:
+            candidate_count = min(requested_count, maximum)
+            graph, candidates = _one_to_one_candidate_graph(
+                distances_all[:, :candidate_count],
+                candidates_all[:, :candidate_count],
             )
-            if candidate_count == 1:
-                distances = distances[:, None]
-                candidate_global = candidate_global[:, None]
-            candidates = np.unique(candidate_global)
-            if len(candidates) < len(rows):
+            if graph is None:
                 continue
-            graph = csr_matrix(
-                (
-                    np.maximum(distances.ravel() ** 2, 1e-15),
-                    (
-                        np.repeat(
-                            np.arange(len(rows), dtype=np.int64), candidate_count
-                        ),
-                        np.searchsorted(candidates, candidate_global).ravel(),
-                    ),
-                ),
-                shape=(len(rows), len(candidates)),
-            )
             try:
-                local_rows, local_columns = min_weight_full_bipartite_matching(graph)
+                local_rows, local_columns = min_weight_full_bipartite_matching(
+                    graph
+                )
             except ValueError:
                 continue
             if len(local_rows) != len(rows):
                 continue
             assigned = np.empty(len(rows), dtype=np.int64)
             assigned[local_rows] = candidates[local_columns]
-            output[rows] = assigned
-            maximum_candidates = max(maximum_candidates, candidate_count)
-            break
-        else:
-            raise RuntimeError(
-                f"cluster-1to1 could not match original cluster {cluster_id}."
+            return rows, assigned, candidate_count
+    raise RuntimeError(
+        "1to1 could not match original cluster "
+        f"{cluster_id} with candidates={candidate_counts}."
+    )
+
+
+def _initialize_one_to_one_worker(xyz_att, xyz_orig, candidate_counts):
+    global _ONE_TO_ONE_WORKER_TREE
+    global _ONE_TO_ONE_WORKER_ORIGINAL
+    global _ONE_TO_ONE_WORKER_CANDIDATES
+    _ONE_TO_ONE_WORKER_TREE = cKDTree(xyz_att)
+    _ONE_TO_ONE_WORKER_ORIGINAL = xyz_orig
+    _ONE_TO_ONE_WORKER_CANDIDATES = candidate_counts
+
+
+def _solve_one_to_one_worker(task):
+    cluster_id, rows = task
+    return _solve_one_to_one_cluster(
+        _ONE_TO_ONE_WORKER_TREE,
+        _ONE_TO_ONE_WORKER_ORIGINAL,
+        cluster_id,
+        rows,
+        _ONE_TO_ONE_WORKER_CANDIDATES,
+    )
+
+
+def _one_to_one_worker_count(requested_workers, point_count, cluster_count):
+    requested_workers = int(requested_workers)
+    if requested_workers < 0:
+        raise ValueError("workers must be zero (auto) or a positive integer.")
+    if requested_workers == 0:
+        if point_count < ONE_TO_ONE_AUTO_WORKER_THRESHOLD:
+            return 1
+        requested_workers = min(4, os.cpu_count() or 1)
+    return max(1, min(requested_workers, cluster_count))
+
+
+def match_point_cloud_one_to_one(
+    xyz_att,
+    xyz_orig,
+    labels,
+    distance_factor=30.0,
+    candidate_counts=ONE_TO_ONE_CANDIDATES,
+    workers=0,
+    verbose=True,
+):
+    """Match original points to received points by a local geometry-only bijection.
+
+    Candidate prefixes 8, 16, 32, 64, and 128 are tried in order.  The first
+    prefix admitting a complete matching is minimized for total squared
+    distance.  Row order is never used.  The bijection is local: different GFT
+    clusters may reuse a received point, so this is not a global bijection.  The
+    two arrays may have different row counts; each cluster only requires enough
+    distinct received candidates for its original rows.
+
+    ``workers=0`` uses serial execution below 100,000 points and up to four
+    processes above it.  A process failure falls back to the identical serial
+    solver and therefore does not alter the correspondence result.
+    """
+    xyz_att = np.asarray(xyz_att, dtype=np.float64)
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    labels = np.asarray(labels)
+    if (
+        xyz_att.ndim != 2
+        or xyz_att.shape[1] != 3
+        or xyz_orig.ndim != 2
+        or xyz_orig.shape[1] != 3
+    ):
+        raise ValueError("1to1 correspondence requires (N, 3) point arrays.")
+    if labels.shape != (len(xyz_orig),):
+        raise ValueError("labels must have one entry per original point.")
+    if len(xyz_orig) == 0:
+        raise ValueError("1to1 correspondence requires original points.")
+    if len(xyz_att) < 2:
+        raise ValueError(
+            "1to1 correspondence requires at least two points."
+        )
+    if distance_factor <= 0:
+        raise ValueError("distance_factor must be positive.")
+
+    candidate_counts = tuple(int(value) for value in candidate_counts)
+    if (
+        not candidate_counts
+        or any(value <= 0 for value in candidate_counts)
+        or any(left >= right for left, right in zip(candidate_counts, candidate_counts[1:]))
+    ):
+        raise ValueError(
+            "candidate_counts must be a strictly increasing sequence of positive integers."
+        )
+    tasks = [
+        (int(cluster_id), np.flatnonzero(labels == cluster_id))
+        for cluster_id in np.unique(labels)
+    ]
+    worker_count = _one_to_one_worker_count(workers, len(xyz_orig), len(tasks))
+    tree = cKDTree(xyz_att)
+    if worker_count == 1:
+        results = [
+            _solve_one_to_one_cluster(
+                tree, xyz_orig, cluster_id, rows, candidate_counts
             )
+            for cluster_id, rows in tasks
+        ]
+    else:
+        try:
+            with ProcessPoolExecutor(
+                max_workers=worker_count,
+                initializer=_initialize_one_to_one_worker,
+                initargs=(xyz_att, xyz_orig, candidate_counts),
+            ) as executor:
+                results = list(executor.map(
+                    _solve_one_to_one_worker, tasks, chunksize=1
+                ))
+        except (OSError, RuntimeError, BrokenProcessPool) as exc:
+            if verbose:
+                print(
+                    "[1to1] process parallelism unavailable; "
+                    f"using the identical serial solver ({exc})"
+                )
+            worker_count = 1
+            results = [
+                _solve_one_to_one_cluster(
+                    tree, xyz_orig, cluster_id, rows, candidate_counts
+                )
+                for cluster_id, rows in tasks
+            ]
+
+    output = np.full(len(xyz_orig), -1, dtype=np.int64)
+    maximum_candidates = 0
+    for rows, assigned, candidate_count in results:
+        output[rows] = assigned
+        maximum_candidates = max(maximum_candidates, candidate_count)
 
     neighbor_distances = tree.query(xyz_att, k=2)[0][:, 1]
     spacing = neighbor_distances[
@@ -1058,12 +1180,13 @@ def match_point_cloud_cluster_one_to_one(
     valid = np.isfinite(distances) & (distances <= threshold)
     matched[~valid] = np.nan
     if verbose:
-        unique_ratio = len(np.unique(output)) / len(output)
+        global_unique_ratio = len(np.unique(output)) / len(output)
         print(
-            f"[Cluster1to1] threshold={threshold:.6e}, "
+            f"[1to1] threshold={threshold:.6e}, "
             f"unmatched={np.count_nonzero(~valid)} / {len(xyz_orig)}, "
-            f"global_unique={unique_ratio:.2%}, "
-            f"max_candidates={maximum_candidates}"
+            "within_cluster_unique=100.00%, "
+            f"global_received_unique={global_unique_ratio:.2%}, "
+            f"max_candidates={maximum_candidates}, workers={worker_count}"
         )
     return matched, valid, distances, threshold
 
@@ -1118,212 +1241,6 @@ def classify_dualband_attack(
     else:
         label = "neutral"
     return label, count_ratio, normal_ratio
-
-
-def _surface_tangent_basis(normal):
-    """Return a deterministic orthonormal basis of the plane normal to normal."""
-    normal = np.asarray(normal, dtype=np.float64)
-    axis = np.zeros(3, dtype=np.float64)
-    axis[int(np.argmin(np.abs(normal)))] = 1.0
-    tangent_u = np.cross(normal, axis)
-    tangent_u /= max(np.linalg.norm(tangent_u), 1e-15)
-    tangent_v = np.cross(normal, tangent_u)
-    tangent_v /= max(np.linalg.norm(tangent_v), 1e-15)
-    return tangent_u, tangent_v
-
-
-def _local_surface_intercepts(
-    query_points,
-    sample_points,
-    sample_tree,
-    normal,
-    neighbors,
-):
-    """Estimate a local affine surface height at every query point.
-
-    The returned intercept is the normal-direction offset of the fitted sample
-    surface at the tangential location of each query point.  Fitting is done in
-    the pseudo-plane coordinate system defined by the original cluster.
-    """
-    query_points = np.asarray(query_points, dtype=np.float64)
-    sample_points = np.asarray(sample_points, dtype=np.float64)
-    k = min(int(neighbors), len(sample_points))
-    if k < 3:
-        raise ValueError("Surface resampling needs at least three sample points.")
-
-    distances, indices = sample_tree.query(query_points, k=k)
-    if k == 1:
-        distances = distances[:, None]
-        indices = indices[:, None]
-    samples = sample_points[indices]
-    delta = samples - query_points[:, None, :]
-    tangent_u, tangent_v = _surface_tangent_basis(normal)
-    local_u = delta @ tangent_u
-    local_v = delta @ tangent_v
-    local_h = delta @ normal
-
-    bandwidth = np.maximum(distances[:, -1], 1e-12)
-    weights = np.exp(-0.5 * (distances / bandwidth[:, None]) ** 2)
-    design = np.stack(
-        (np.ones_like(local_u), local_u, local_v),
-        axis=2,
-    )
-    normal_matrix = np.einsum(
-        "nki,nk,nkj->nij", design, weights, design, optimize=True
-    )
-    right_hand_side = np.einsum(
-        "nki,nk,nk->ni", design, weights, local_h, optimize=True
-    )
-    regularization = np.maximum(
-        np.trace(normal_matrix, axis1=1, axis2=2) * 1e-10,
-        1e-14,
-    )
-    normal_matrix += regularization[:, None, None] * np.eye(3)[None, :, :]
-    try:
-        coefficients = np.linalg.solve(
-            normal_matrix,
-            right_hand_side[:, :, None],
-        )[:, :, 0]
-    except (np.linalg.LinAlgError, ValueError):
-        coefficients = np.empty((len(query_points), 3), dtype=np.float64)
-        for index in range(len(query_points)):
-            weighted_design = design[index] * np.sqrt(weights[index])[:, None]
-            weighted_height = local_h[index] * np.sqrt(weights[index])
-            coefficients[index] = np.linalg.lstsq(
-                weighted_design, weighted_height, rcond=None
-            )[0]
-    return coefficients[:, 0], distances[:, 0]
-
-
-def _fill_surface_offsets(points, offsets, valid):
-    """Fill a small number of unsupported offsets from nearby valid vertices."""
-    points = np.asarray(points, dtype=np.float64)
-    offsets = np.asarray(offsets, dtype=np.float64).copy()
-    valid = np.asarray(valid, dtype=bool)
-    missing = ~valid
-    if not np.any(missing):
-        return offsets
-    valid_count = int(np.count_nonzero(valid))
-    if valid_count == 0:
-        return offsets
-
-    k = min(8, valid_count)
-    distances, indices = cKDTree(points[valid]).query(points[missing], k=k)
-    if k == 1:
-        distances = distances[:, None]
-        indices = indices[:, None]
-    weights = 1.0 / np.maximum(distances, 1e-12)
-    weights /= np.sum(weights, axis=1, keepdims=True)
-    offsets[missing] = np.sum(
-        offsets[valid][indices] * weights,
-        axis=1,
-    )
-    return offsets
-
-
-def resample_attacked_surface_to_original(
-    attacked_vertices,
-    original_vertices,
-    labels,
-    distance_factor=5.0,
-    neighbors=12,
-    max_missing_ratio=0.1,
-    verbose=True,
-):
-    """Resample the attacked surface at the saved original vertex positions.
-
-    For every original cluster, local affine surfaces are fitted to both the
-    saved original cloud and the attacked cloud in the original pseudo-plane
-    frame.  Subtracting their fitted intercepts removes the original surface
-    curvature bias and estimates only the attack/watermark height displacement.
-    A small unsupported fraction is interpolated inside the original cluster;
-    clusters with larger missing regions remain invalid.
-    """
-    attacked_vertices = np.asarray(attacked_vertices, dtype=np.float64)
-    original_vertices = np.asarray(original_vertices, dtype=np.float64)
-    labels = np.asarray(labels)
-    if attacked_vertices.ndim != 2 or attacked_vertices.shape[1] != 3:
-        raise ValueError("attacked_vertices must have shape (N, 3).")
-    if original_vertices.ndim != 2 or original_vertices.shape[1] != 3:
-        raise ValueError("original_vertices must have shape (N, 3).")
-    if len(attacked_vertices) < 3:
-        raise ValueError("Surface correspondence needs at least three attacked points.")
-    if labels.ndim != 1 or len(labels) != len(original_vertices):
-        raise ValueError("labels must contain one cluster label per original vertex.")
-    if not np.isfinite(attacked_vertices).all() or not np.isfinite(original_vertices).all():
-        raise ValueError("Surface correspondence inputs contain NaN or infinity.")
-    if distance_factor <= 0:
-        raise ValueError("distance_factor must be positive.")
-    if not isinstance(neighbors, (int, np.integer)) or neighbors < 3:
-        raise ValueError("neighbors must be an integer of at least 3.")
-    if not 0.0 <= max_missing_ratio < 1.0:
-        raise ValueError("max_missing_ratio must be in [0, 1).")
-
-    attacked_tree = cKDTree(attacked_vertices)
-    original_tree = cKDTree(original_vertices)
-    neighbor_distances, _ = attacked_tree.query(attacked_vertices, k=2)
-    spacing = neighbor_distances[:, 1]
-    spacing = spacing[np.isfinite(spacing) & (spacing > 1e-12)]
-    if len(spacing) == 0:
-        raise ValueError("Cannot estimate attacked point spacing.")
-    distance_threshold = float(distance_factor * np.median(spacing))
-
-    aligned = np.full_like(original_vertices, np.nan, dtype=np.float64)
-    usable = np.zeros(len(original_vertices), dtype=bool)
-    observed_count = 0
-    filled_count = 0
-    rejected_clusters = 0
-
-    for cluster_id in np.unique(labels):
-        cluster_indices = np.flatnonzero(labels == cluster_id)
-        points = original_vertices[cluster_indices]
-        _, normal = compute_pseudoplane_pca(points)
-        original_offset, _ = _local_surface_intercepts(
-            points,
-            original_vertices,
-            original_tree,
-            normal,
-            neighbors,
-        )
-        attacked_offset, nearest_distance = _local_surface_intercepts(
-            points,
-            attacked_vertices,
-            attacked_tree,
-            normal,
-            neighbors,
-        )
-        observed = (
-            np.isfinite(attacked_offset)
-            & np.isfinite(original_offset)
-            & (nearest_distance <= distance_threshold)
-        )
-        observed_count += int(np.count_nonzero(observed))
-        missing_ratio = 1.0 - float(np.mean(observed))
-        if not np.any(observed) or missing_ratio > max_missing_ratio:
-            rejected_clusters += 1
-            continue
-
-        displacement = attacked_offset - original_offset
-        if not np.all(observed):
-            filled_count += int(np.count_nonzero(~observed))
-            displacement = _fill_surface_offsets(
-                points,
-                displacement,
-                observed,
-            )
-        aligned[cluster_indices] = (
-            points + displacement[:, None] * normal[None, :]
-        )
-        usable[cluster_indices] = True
-
-    if verbose:
-        print(
-            f"[Surface] neighbors={neighbors}, "
-            f"threshold={distance_threshold:.6e}, "
-            f"observed={observed_count}/{len(original_vertices)}, "
-            f"filled={filled_count}, rejected_clusters={rejected_clusters}"
-        )
-    return aligned, usable
 
 
 def is_vertex_order_consistent(
@@ -1384,47 +1301,50 @@ def align_attacked_vertices_to_original(
     max_index_inconsistency_ratio=0.01,
     correspondence_mode="auto",
     labels=None,
-    cluster_match_candidates=CLUSTER_ONE_TO_ONE_CANDIDATES,
+    one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
     verbose=True,
+    one_to_one_workers=0,
 ):
     """Align attacked vertices to original-vertex order using X1 matching.
 
     ``correspondence_mode="auto"`` retains index correspondence when the arrays
     have equal shape and the order-consistency test succeeds. ``"coordinate"``
     always uses coordinate-based nearest-neighbor matching, while ``"index"``
-    requires equal array shapes. The returned mask identifies original vertices
-    with a match inside the common distance threshold.
+    requires equal array shapes. ``"1to1"`` ignores row order and enforces a
+    bijection inside each original GFT cluster. The returned mask
+    identifies original vertices with a match inside the distance threshold.
     """
-    if correspondence_mode not in {"auto", "index", "coordinate", "cluster-1to1"}:
+    if correspondence_mode not in {"auto", "index", "coordinate", "1to1"}:
         raise ValueError(
-            "correspondence_mode must be 'auto', 'index', 'coordinate', or "
-            "'cluster-1to1'."
+            "correspondence_mode must be 'auto', 'index', 'coordinate', or '1to1'."
         )
     attacked_vertices = np.asarray(attacked_vertices, dtype=float)
     original_vertices = np.asarray(original_vertices, dtype=float)
-    if correspondence_mode == "cluster-1to1":
+    if correspondence_mode == "1to1":
         if labels is None:
-            raise ValueError("cluster-1to1 correspondence requires original labels.")
+            raise ValueError("1to1 correspondence requires original labels.")
         if len(attacked_vertices) == len(original_vertices):
             try:
-                aligned, matched_mask, _, _ = match_point_cloud_cluster_one_to_one(
+                aligned, matched_mask, _, _ = match_point_cloud_one_to_one(
                     attacked_vertices,
                     original_vertices,
                     labels,
                     distance_factor=coordinate_distance_factor,
-                    candidate_counts=cluster_match_candidates,
+                    candidate_counts=one_to_one_candidates,
+                    workers=one_to_one_workers,
                     verbose=verbose,
                 )
                 return aligned, matched_mask
             except (RuntimeError, ValueError) as exc:
                 if verbose:
                     print(
-                        "[Cluster1to1] matching failed; falling back to "
+                        "[1to1] matching failed; falling back to "
                         f"coordinate many-to-one ({exc})"
                     )
         elif verbose:
             print(
-                f"[Cluster1to1] vertex count changed: {len(original_vertices)} -> "
+                "[1to1] vertex count changed: "
+                f"{len(original_vertices)} -> "
                 f"{len(attacked_vertices)}; correspondence=coordinate fallback"
             )
         aligned_vertices, matched_vertex_mask, _, _ = match_point_cloud_to_original(
@@ -1486,9 +1406,8 @@ def extract_watermark_x1(
     coordinate_distance_factor: float = 2.0,
     max_index_inconsistency_ratio: float = 0.01,
     correspondence_mode: str = "auto",
-    cluster_match_candidates=CLUSTER_ONE_TO_ONE_CANDIDATES,
-    surface_neighbors: int = 12,
-    surface_max_missing_ratio: float = 0.1,
+    one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
+    one_to_one_workers: int = 0,
 ):
     """
     埋め込み前点群 xyz_orig から疑似平面を再構築し、
@@ -1497,37 +1416,23 @@ def extract_watermark_x1(
     重要:
     - 疑似平面推定は xyz_orig（埋め込み前）で行う（xyz_embで推定すると透かし変位が平面推定に混入する）。
     - グラフも xyz_orig（クラスタ内座標）で構築する（埋め込み前と一致させる）。
-    - ``surface`` は攻撃後点を元頂点へ直接割り当てず、元クラスタの疑似平面上で
-      攻撃後局所曲面を回帰し、元頂点位置の高さとして再サンプリングする。
     """
     xyz_emb = np.asarray(xyz_emb, dtype=float)
     xyz_orig = np.asarray(xyz_orig, dtype=float)
-    if correspondence_mode == "surface":
-        aligned_attacked_vertices, matched_vertex_mask = (
-            resample_attacked_surface_to_original(
-                xyz_emb,
-                xyz_orig,
-                labels,
-                distance_factor=coordinate_distance_factor,
-                neighbors=surface_neighbors,
-                max_missing_ratio=surface_max_missing_ratio,
-                verbose=True,
-            )
+    aligned_attacked_vertices, matched_vertex_mask = (
+        align_attacked_vertices_to_original(
+            xyz_emb,
+            xyz_orig,
+            index_distance_factor=index_distance_factor,
+            coordinate_distance_factor=coordinate_distance_factor,
+            max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+            correspondence_mode=correspondence_mode,
+            labels=labels,
+            one_to_one_candidates=one_to_one_candidates,
+            one_to_one_workers=one_to_one_workers,
+            verbose=True,
         )
-    else:
-        aligned_attacked_vertices, matched_vertex_mask = (
-            align_attacked_vertices_to_original(
-                xyz_emb,
-                xyz_orig,
-                index_distance_factor=index_distance_factor,
-                coordinate_distance_factor=coordinate_distance_factor,
-                max_index_inconsistency_ratio=max_index_inconsistency_ratio,
-                correspondence_mode=correspondence_mode,
-                labels=labels,
-                cluster_match_candidates=cluster_match_candidates,
-                verbose=True,
-            )
-        )
+    )
     if embed_bits_length <= 0:
         return []
 
@@ -1616,14 +1521,13 @@ def extract_watermark_x1_dualband(
     index_distance_factor=20.0,
     coordinate_distance_factor=2.0,
     max_index_inconsistency_ratio=0.01,
-    correspondence_mode="cluster-1to1",
-    cluster_match_candidates=CLUSTER_ONE_TO_ONE_CANDIDATES,
-    surface_neighbors=12,
-    surface_max_missing_ratio=0.1,
+    correspondence_mode="1to1",
+    one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
     low_band=DUAL_BAND_LOW_RANGE,
     high_band=DUAL_BAND_HIGH_RANGE,
     code_key=DUAL_BAND_CODE_KEY,
     attack_reference_feature=None,
+    one_to_one_workers=0,
 ):
     """Extract the ``DualBand`` spread watermark without using PCD row order.
 
@@ -1641,28 +1545,18 @@ def extract_watermark_x1_dualband(
     if embed_bits_length <= 0:
         return []
 
-    if correspondence_mode == "surface":
-        aligned_vertices, matched_vertex_mask = resample_attacked_surface_to_original(
-            xyz_emb,
-            xyz_orig,
-            labels,
-            distance_factor=coordinate_distance_factor,
-            neighbors=surface_neighbors,
-            max_missing_ratio=surface_max_missing_ratio,
-            verbose=True,
-        )
-    else:
-        aligned_vertices, matched_vertex_mask = align_attacked_vertices_to_original(
-            xyz_emb,
-            xyz_orig,
-            index_distance_factor=index_distance_factor,
-            coordinate_distance_factor=coordinate_distance_factor,
-            max_index_inconsistency_ratio=max_index_inconsistency_ratio,
-            correspondence_mode=correspondence_mode,
-            labels=labels,
-            cluster_match_candidates=cluster_match_candidates,
-            verbose=True,
-        )
+    aligned_vertices, matched_vertex_mask = align_attacked_vertices_to_original(
+        xyz_emb,
+        xyz_orig,
+        index_distance_factor=index_distance_factor,
+        coordinate_distance_factor=coordinate_distance_factor,
+        max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+        correspondence_mode=correspondence_mode,
+        labels=labels,
+        one_to_one_candidates=one_to_one_candidates,
+        one_to_one_workers=one_to_one_workers,
+        verbose=True,
+    )
 
     low_scores = np.zeros(embed_bits_length, dtype=np.float64)
     high_scores = np.zeros(embed_bits_length, dtype=np.float64)

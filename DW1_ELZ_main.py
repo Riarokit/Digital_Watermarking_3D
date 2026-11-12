@@ -4,6 +4,7 @@ import numpy as np
 import open3d as o3d
 
 import DW1_ELZ_func as DW1ELZ
+import DW1_X1_func as DW1X1
 import DW2_func as DW2F
 
 
@@ -16,6 +17,9 @@ if __name__ == "__main__":
     a = 4.49e-3  # Dragon用
     # a = 3.21e-3  # Armadillo用
     show = True
+    correspondence_mode = "1to1"
+    one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
+    one_to_one_workers = 0
 
     # 1. データ取得
     image_path = "watermark16.bmp"
@@ -84,7 +88,14 @@ if __name__ == "__main__":
     # 5. 抽出処理
     start_extract = time.time()
     extracted_bits = DW1ELZ.extract_watermark_elzein_mesh(
-        xyz_after, xyz, triangles_after, key_info=key_info, verbose=True
+        xyz_after,
+        xyz,
+        triangles_after,
+        key_info=key_info,
+        verbose=True,
+        correspondence_mode=correspondence_mode,
+        one_to_one_candidates=one_to_one_candidates,
+        one_to_one_workers=one_to_one_workers,
     )
     extract_time = time.time() - start_extract
 

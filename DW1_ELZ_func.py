@@ -13,7 +13,9 @@ import skfuzzy as fuzz
 from sklearn.cluster import KMeans
 
 from DW1_X1_func import (
+    ONE_TO_ONE_CANDIDATES,
     align_attacked_vertices_to_original,
+    match_point_cloud_one_to_one,
     repeat_bits_blockwise,
 )
 
@@ -297,12 +299,14 @@ def extract_watermark_elzein_mesh(
     coordinate_distance_factor=2.0,
     max_index_inconsistency_ratio=0.01,
     correspondence_mode="auto",
+    one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
+    one_to_one_workers=0,
 ):
-    """同一頂点インデックスの座標差をグループ内多数決して抽出する。
+    """対応付けたキャリアの座標差をグループ内多数決して抽出する。
 
-    El Zein Method II の Portion 2 は透かし入りモデルと原モデルの
-    対応頂点差を前提とする。汎用座標同期は行わず、頂点数または
-    頂点順序・接続情報が変化した場合は全ビットを抽出不能として返す。
+    ``1to1`` は、保存済みの各 El Zein キャリアクラスタ内で独立に
+    最小コストの1対1対応を求める。頂点数が変化した場合、または割当が
+    成立しない場合は、coordinateの多対1対応へフォールバックする。
     """
     original_vertices = np.asarray(original_vertices, dtype=float)
     if original_vertices.ndim != 2 or original_vertices.shape[1] != 3:
@@ -315,17 +319,62 @@ def extract_watermark_elzein_mesh(
         raise ValueError(
             "original_vertices does not match the mesh used for embedding."
         )
-    aligned_marked_vertices, matched_vertex_mask = (
-        align_attacked_vertices_to_original(
-            marked_vertices,
-            original_vertices,
-            index_distance_factor=index_distance_factor,
-            coordinate_distance_factor=coordinate_distance_factor,
-            max_index_inconsistency_ratio=max_index_inconsistency_ratio,
-            correspondence_mode=correspondence_mode,
-            verbose=verbose,
+    if correspondence_mode == "1to1" and len(marked_vertices) == len(original_vertices):
+        carrier_indices = np.concatenate(carrier_clusters)
+        carrier_labels = np.concatenate([
+            np.full(len(cluster), cluster_id, dtype=np.int64)
+            for cluster_id, cluster in enumerate(carrier_clusters)
+        ])
+        try:
+            matched_carriers, valid_carriers, _, _ = match_point_cloud_one_to_one(
+                marked_vertices,
+                original_vertices[carrier_indices],
+                carrier_labels,
+                distance_factor=coordinate_distance_factor,
+                candidate_counts=one_to_one_candidates,
+                workers=one_to_one_workers,
+                verbose=verbose,
+            )
+            aligned_marked_vertices = np.full_like(original_vertices, np.nan)
+            matched_vertex_mask = np.zeros(len(original_vertices), dtype=bool)
+            aligned_marked_vertices[carrier_indices] = matched_carriers
+            matched_vertex_mask[carrier_indices] = valid_carriers
+        except (RuntimeError, ValueError) as exc:
+            if verbose:
+                print(
+                    "[ElZein 1to1] matching failed; falling back to "
+                    f"coordinate many-to-one ({exc})"
+                )
+            aligned_marked_vertices, matched_vertex_mask = (
+                align_attacked_vertices_to_original(
+                    marked_vertices,
+                    original_vertices,
+                    coordinate_distance_factor=coordinate_distance_factor,
+                    correspondence_mode="coordinate",
+                    verbose=verbose,
+                )
+            )
+    else:
+        if correspondence_mode == "1to1" and verbose:
+            print(
+                "[ElZein 1to1] vertex count changed: "
+                f"{len(original_vertices)} -> {len(marked_vertices)}; "
+                "correspondence=coordinate fallback"
+            )
+        effective_mode = (
+            "coordinate" if correspondence_mode == "1to1" else correspondence_mode
         )
-    )
+        aligned_marked_vertices, matched_vertex_mask = (
+            align_attacked_vertices_to_original(
+                marked_vertices,
+                original_vertices,
+                index_distance_factor=index_distance_factor,
+                coordinate_distance_factor=coordinate_distance_factor,
+                max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+                correspondence_mode=effective_mode,
+                verbose=verbose,
+            )
+        )
 
     bit_votes = [[] for _ in range(key_info.watermark_length)]
     for cluster in carrier_clusters:

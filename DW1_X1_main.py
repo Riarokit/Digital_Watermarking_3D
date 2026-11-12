@@ -33,11 +33,11 @@ if __name__ == "__main__":
     radius = 0.03
     # 点群対応付け設定
     index_distance_factor = 30.0           # 同一インデックス対応の許容距離倍率
-    coordinate_distance_factor = 5.0      # 座標・曲面対応の許容距離倍率
+    coordinate_distance_factor = 30.0     # 座標・曲面対応の許容距離倍率
     max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
-    correspondence_mode = "surface"       # "auto", "index", "coordinate", "surface"
-    surface_neighbors = 12                # 局所曲面回帰に使う攻撃後点数
-    surface_max_missing_ratio = 0.1       # クラスタ内補間を許す欠損率
+    correspondence_mode = "1to1"
+    one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
+    one_to_one_workers = 0  # auto: serial for Bunny, up to 4 processes when large
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=1.0, iterations=50, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
-    xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.2, mode='axis', axis=0)
+    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.2, mode='axis', axis=0)
 
     # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.2, seed=42)
@@ -125,8 +125,8 @@ if __name__ == "__main__":
         coordinate_distance_factor=coordinate_distance_factor,
         max_index_inconsistency_ratio=max_index_inconsistency_ratio,
         correspondence_mode=correspondence_mode,
-        surface_neighbors=surface_neighbors,
-        surface_max_missing_ratio=surface_max_missing_ratio,
+        one_to_one_candidates=one_to_one_candidates,
+        one_to_one_workers=one_to_one_workers,
     )
     extract_time = time.time() - start
 
