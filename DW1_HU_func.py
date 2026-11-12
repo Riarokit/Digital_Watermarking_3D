@@ -9,6 +9,7 @@ imperceptibility based on EMD on surfaces", The Visual Computer, 2023.
 """
 
 from dataclasses import dataclass
+from itertools import permutations, product
 
 import numpy as np
 import open3d as o3d
@@ -29,6 +30,8 @@ class HuWatermarkKey:
     embedding_indices: np.ndarray
     embedding_positions: np.ndarray
     matching_threshold: float
+    embedding_signatures: np.ndarray
+    registration_threshold: float
     bit_indices: np.ndarray
     repetitions: np.ndarray
     watermark_size: int
@@ -100,6 +103,28 @@ def _reconstruct_mesh_from_points(vertices):
     return reconstructed_vertices, reconstructed_triangles
 
 
+def _compact_valid_surface(vertices, triangles, minimum_twice_area=1e-15):
+    """Remove zero-area faces and vertices no longer belonging to the surface."""
+    vertices, triangles = _validate_mesh(vertices, triangles)
+    vectors_1 = vertices[triangles[:, 1]] - vertices[triangles[:, 0]]
+    vectors_2 = vertices[triangles[:, 2]] - vertices[triangles[:, 0]]
+    twice_areas = np.linalg.norm(np.cross(vectors_1, vectors_2), axis=1)
+    valid_faces = np.isfinite(twice_areas) & (
+        twice_areas > float(minimum_twice_area)
+    )
+    triangles = triangles[valid_faces]
+    if len(triangles) == 0:
+        raise ValueError("攻撃後メッシュに有効な三角形が残っていません。")
+
+    used_vertices = np.unique(triangles)
+    if len(used_vertices) == len(vertices) and np.all(valid_faces):
+        return vertices, triangles, np.arange(len(vertices), dtype=np.int64)
+
+    old_to_new = np.full(len(vertices), -1, dtype=np.int64)
+    old_to_new[used_vertices] = np.arange(len(used_vertices), dtype=np.int64)
+    return vertices[used_vertices], old_to_new[triangles], used_vertices
+
+
 def _prepare_extraction_mesh(vertices, triangles):
     """Use valid supplied connectivity, reconstructing only legacy point input."""
     vertices = np.asarray(vertices, dtype=float)
@@ -108,25 +133,52 @@ def _prepare_extraction_mesh(vertices, triangles):
         int(triangles.max()) + 1 if len(triangles) else 0
     )
     if len(vertices) != referenced_vertex_count:
-        return _reconstruct_mesh_from_points(vertices)
-    return _validate_mesh(vertices, triangles)
+        reconstructed_vertices, reconstructed_triangles = (
+            _reconstruct_mesh_from_points(vertices)
+        )
+        return _compact_valid_surface(
+            reconstructed_vertices, reconstructed_triangles
+        )
+    return _compact_valid_surface(vertices, triangles)
 
 
 def get_mesh_laplacian(vertices, triangles):
-    """自己ループを含まない組合せ Laplacian ``D - W`` を構築する。"""
-    n = len(vertices)
-    rows, cols = [], []
-    for a, b, c in triangles:
-        for u, v in ((a, b), (b, c), (c, a)):
+    """Surface EMD原典に従うcotangent Laplacian ``D - W`` を構築する。"""
+    vertices = np.asarray(vertices, dtype=np.float64)
+    triangles = np.asarray(triangles, dtype=np.int64)
+    vertex_count = len(vertices)
+    rows, cols, weights = [], [], []
+    incident_count = np.zeros(vertex_count, dtype=np.int64)
+
+    for i, j, k in triangles:
+        vi, vj, vk = vertices[[i, j, k]]
+        twice_area = np.linalg.norm(np.cross(vj - vi, vk - vi))
+        if not np.isfinite(twice_area) or twice_area <= 1e-15:
+            continue
+        cot_i = np.dot(vj - vi, vk - vi) / twice_area
+        cot_j = np.dot(vi - vj, vk - vj) / twice_area
+        cot_k = np.dot(vi - vk, vj - vk) / twice_area
+        for u, v, weight in (
+            (j, k, 0.5 * cot_i),
+            (i, k, 0.5 * cot_j),
+            (i, j, 0.5 * cot_k),
+        ):
             rows.extend((u, v))
             cols.extend((v, u))
-    adjacency = sparse.coo_matrix((np.ones(len(rows)), (rows, cols)), shape=(n, n)).tocsr()
-    adjacency.data[:] = 1.0
+            weights.extend((weight, weight))
+            incident_count[u] += 1
+            incident_count[v] += 1
+
+    if np.any(incident_count == 0):
+        raise ValueError(
+            "有効な三角形に接続していない頂点を含むため、surface EMDを計算できません。"
+        )
+    adjacency = sparse.coo_matrix(
+        (weights, (rows, cols)), shape=(vertex_count, vertex_count)
+    ).tocsr()
     adjacency.eliminate_zeros()
     degree = np.asarray(adjacency.sum(axis=1)).ravel()
-    if np.any(degree == 0):
-        raise ValueError("孤立頂点を含むメッシュでは表面 EMD を計算できません。")
-    return sparse.diags(degree) - adjacency
+    return (sparse.diags(degree) - adjacency).tocsr()
 
 
 def _one_ring_neighbors(n, triangles):
@@ -338,6 +390,18 @@ def _nearest_neighbor_scale(points):
     return float(np.median(spacing)) if len(spacing) else 0.0
 
 
+def _canonical_coordinates(points):
+    """Remove translation, uniform scale, and PCA rotation for registration."""
+    points = np.asarray(points, dtype=np.float64)
+    centered = points - np.mean(points, axis=0)
+    scale = float(np.max(np.linalg.norm(centered, axis=1)))
+    if not np.isfinite(scale) or scale <= 1e-15:
+        raise ValueError("similarity registrationの座標正規化に失敗しました。")
+    normalized = centered / scale
+    _, eigenvectors = np.linalg.eigh(normalized.T @ normalized)
+    return normalized @ eigenvectors[:, ::-1]
+
+
 def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=25,
                             watermark_size=32, arnold_iterations=20, extreme_parameter=0.8,
                             epsilon=1e-4):
@@ -376,7 +440,9 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
 
     scale = np.divide(rho_new, rho, out=np.zeros_like(rho_new), where=rho > 1e-15)
     watermarked = centered * scale[:, None] + np.mean(vertices, axis=0)
+    canonical_watermarked = _canonical_coordinates(watermarked)
     raw_extent = np.linalg.norm(np.ptp(watermarked, axis=0))
+    canonical_extent = np.linalg.norm(np.ptp(canonical_watermarked, axis=0))
     key = HuWatermarkKey(
         embedding_indices=embedding_indices,
         embedding_positions=watermarked[embedding_indices].copy(),
@@ -384,6 +450,11 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
         # multiplies it by coordinate_distance_factor to obtain the threshold.
         matching_threshold=max(
             _nearest_neighbor_scale(watermarked), raw_extent * 1e-5
+        ),
+        embedding_signatures=canonical_watermarked[embedding_indices].copy(),
+        registration_threshold=max(
+            _nearest_neighbor_scale(canonical_watermarked),
+            canonical_extent * 1e-5,
         ),
         bit_indices=bit_indices,
         repetitions=reps,
@@ -439,6 +510,7 @@ def _match_embedding_positions(
     key,
     coordinate_distance_factor,
     neighbors=16,
+    allow_similarity_registration=True,
 ):
     """保存キャリアを再検出した安定極値点へ一対一対応させる。
 
@@ -459,16 +531,87 @@ def _match_embedding_positions(
     if len(candidate_indices):
         candidate_indices = np.unique(candidate_indices)
 
-    local_indices, distances = _greedy_unique_match(
+    raw_threshold = key.matching_threshold * coordinate_distance_factor
+    best_local_indices, best_distances = _greedy_unique_match(
         key.embedding_positions,
         vertices[candidate_indices],
-        key.matching_threshold * coordinate_distance_factor,
+        raw_threshold,
         neighbors=neighbors,
     )
+    best_valid = best_local_indices >= 0
+    best_count = int(np.count_nonzero(best_valid))
+    best_error = (
+        float(np.median(best_distances[best_valid])) / raw_threshold
+        if best_count
+        else np.inf
+    )
+    best_mode = "raw"
+    best_threshold = raw_threshold
+
+    raw_median_distance = (
+        float(np.median(best_distances[best_valid])) if best_count else np.inf
+    )
+    raw_is_confident = (
+        best_count == len(key.embedding_positions)
+        and raw_median_distance <= 2.0 * key.matching_threshold
+    )
+    if not allow_similarity_registration or raw_is_confident:
+        matched = np.full(len(key.embedding_positions), -1, dtype=np.int64)
+        matched[best_valid] = candidate_indices[best_local_indices[best_valid]]
+        return (
+            matched,
+            best_valid,
+            best_distances,
+            len(candidate_indices),
+            best_mode,
+            best_threshold,
+        )
+
+    # Algorithm 2 requires registration for a similarity-transformed model.
+    # PCA removes translation, uniform scale, and rotation.  PCA axes have an
+    # unavoidable permutation/sign ambiguity, so all 48 discrete orientations
+    # are evaluated and the match with maximum coverage/minimum error is used.
+    canonical_vertices = _canonical_coordinates(vertices)
+    registration_threshold = (
+        key.registration_threshold * coordinate_distance_factor
+    )
+    canonical_candidates = canonical_vertices[candidate_indices]
+    for permutation in permutations(range(3)):
+        permuted = canonical_candidates[:, permutation]
+        for signs in product((-1.0, 1.0), repeat=3):
+            registered_candidates = permuted * np.asarray(signs)
+            local_indices, distances = _greedy_unique_match(
+                key.embedding_signatures,
+                registered_candidates,
+                registration_threshold,
+                neighbors=neighbors,
+            )
+            valid = local_indices >= 0
+            count = int(np.count_nonzero(valid))
+            error = (
+                float(np.median(distances[valid])) / registration_threshold
+                if count
+                else np.inf
+            )
+            if count > best_count or (count == best_count and error < best_error):
+                best_local_indices = local_indices
+                best_distances = distances
+                best_valid = valid
+                best_count = count
+                best_error = error
+                best_mode = "similarity-registration"
+                best_threshold = registration_threshold
+
     matched = np.full(len(key.embedding_positions), -1, dtype=np.int64)
-    valid = local_indices >= 0
-    matched[valid] = candidate_indices[local_indices[valid]]
-    return matched, valid, distances, len(candidate_indices)
+    matched[best_valid] = candidate_indices[best_local_indices[best_valid]]
+    return (
+        matched,
+        best_valid,
+        best_distances,
+        len(candidate_indices),
+        best_mode,
+        best_threshold,
+    )
 
 
 def extract_watermark_hu_mesh(
@@ -483,9 +626,9 @@ def extract_watermark_hu_mesh(
     """論文 Algorithm 2、式 (12)、式 (13) に基づいて透かしを抽出する。
 
     ``coordinate`` は保存した埋め込み極値座標と、攻撃後に再検出した安定極値を
-    距離制約付きで一対一対応させる。両モデルは同一座標系にregistration済みで
-    あることを前提とする。``index`` は比較実験用であり、論文のindex-freeという
-    主張を再現する場合は ``coordinate`` を使用する。
+    距離制約付きで一対一対応させる。Algorithm 2に従い、平行移動・一様拡大縮小・
+    回転を除いたsimilarity registrationも評価する。``index`` は比較実験用であり、
+    頂点番号に依存しない評価では ``coordinate`` を使用する。
     """
     if not isinstance(key_info, HuWatermarkKey):
         raise TypeError("key_info must be the HuWatermarkKey returned by embed_watermark_hu_mesh.")
@@ -511,7 +654,9 @@ def extract_watermark_hu_mesh(
         attacked_vertex_count == original_vertex_count
         and np.array_equal(attacked_triangles, key_info.original_triangles)
     )
-    vertices, triangles = _prepare_extraction_mesh(vertices, triangles)
+    vertices, triangles, retained_input_indices = _prepare_extraction_mesh(
+        vertices, triangles
+    )
     centered = vertices - np.mean(vertices, axis=0)
     rho = np.linalg.norm(centered, axis=1)
     rho_max = float(np.max(rho))
@@ -526,10 +671,17 @@ def extract_watermark_hu_mesh(
             raise ValueError(
                 "index correspondence requires the original vertex count."
             )
-        # 比較実験用のindex対応。Huらの論文が主張するindex-free抽出を
-        # 再現する場合はcoordinateを明示的に指定する。
-        matched = np.asarray(key_info.embedding_indices, dtype=np.int64)
-        valid_carriers = (matched >= 0) & (matched < len(vertices))
+        # 比較実験用のindex対応。頂点番号に依存しない評価では
+        # coordinateを明示的に指定する。
+        input_to_compact = np.full(attacked_vertex_count, -1, dtype=np.int64)
+        input_to_compact[retained_input_indices] = np.arange(
+            len(retained_input_indices), dtype=np.int64
+        )
+        saved_indices = np.asarray(key_info.embedding_indices, dtype=np.int64)
+        matched = np.full(len(saved_indices), -1, dtype=np.int64)
+        in_input = (saved_indices >= 0) & (saved_indices < attacked_vertex_count)
+        matched[in_input] = input_to_compact[saved_indices[in_input]]
+        valid_carriers = matched >= 0
         if verbose:
             print(
                 f"[Hu] correspondence=index, "
@@ -537,7 +689,14 @@ def extract_watermark_hu_mesh(
             )
     else:
         # 保存極値座標と攻撃後に再検出した安定極値だけを疎に対応付ける。
-        matched, valid_carriers, matched_distances, candidate_count = (
+        (
+            matched,
+            valid_carriers,
+            matched_distances,
+            candidate_count,
+            registration_mode,
+            matching_threshold,
+        ) = (
             _match_embedding_positions(
                 vertices,
                 triangles,
@@ -545,6 +704,7 @@ def extract_watermark_hu_mesh(
                 key_info,
                 coordinate_distance_factor=coordinate_distance_factor,
                 neighbors=int(coordinate_neighbors),
+                allow_similarity_registration=preserves_original_vertices,
             )
         )
         if verbose:
@@ -556,9 +716,10 @@ def extract_watermark_hu_mesh(
             )
             print(
                 f"[Hu] correspondence=coordinate, "
+                f"registration={registration_mode}, "
                 f"stable_extrema={candidate_count}, "
                 f"matched={np.count_nonzero(valid_carriers)}/{len(matched)}, "
-                f"threshold={key_info.matching_threshold * coordinate_distance_factor:.6g}, "
+                f"threshold={matching_threshold:.6g}, "
                 f"median_distance={median_distance:.6g}"
             )
 

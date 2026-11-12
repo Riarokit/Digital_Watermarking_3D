@@ -2,6 +2,7 @@ import numpy as np
 import open3d as o3d
 import random
 import string
+from scipy import sparse
 from scipy.spatial import cKDTree
 from sklearn.neighbors import NearestNeighbors
 from PIL import Image
@@ -1033,6 +1034,53 @@ def smoothing_attack(xyz, lambda_val=0.1, iterations=5, k=6, verbose=True):
         xyz_smooth = xyz_smooth + lambda_val * (centroids - xyz_smooth)
         
     return xyz_smooth
+
+
+def mesh_laplacian_smoothing_attack(
+    xyz,
+    triangles,
+    lambda_val=0.1,
+    iterations=5,
+    verbose=True,
+):
+    """三角形メッシュの1-ring接続を使うLaplacian smoothing攻撃。"""
+    xyz = np.asarray(xyz, dtype=np.float64)
+    triangles = np.asarray(triangles, dtype=np.int64)
+    if xyz.ndim != 2 or xyz.shape[1] != 3 or len(xyz) == 0:
+        raise ValueError("xyz must have shape (N, 3) and contain points.")
+    if triangles.ndim != 2 or triangles.shape[1] != 3 or len(triangles) == 0:
+        raise ValueError("triangles must have shape (M, 3) and contain faces.")
+    if np.any(triangles < 0) or np.any(triangles >= len(xyz)):
+        raise ValueError("triangles contains an out-of-range vertex index.")
+    if not 0.0 < lambda_val <= 1.0:
+        raise ValueError("lambda_val must be in (0, 1].")
+    if not isinstance(iterations, (int, np.integer)) or iterations < 0:
+        raise ValueError("iterations must be a non-negative integer.")
+
+    rows, cols = [], []
+    for i, j, k in triangles:
+        rows.extend((i, j, j, k, k, i))
+        cols.extend((j, i, k, j, i, k))
+    adjacency = sparse.coo_matrix(
+        (np.ones(len(rows), dtype=np.float64), (rows, cols)),
+        shape=(len(xyz), len(xyz)),
+    ).tocsr()
+    adjacency.data[:] = 1.0
+    adjacency.eliminate_zeros()
+    degree = np.asarray(adjacency.sum(axis=1)).ravel()
+    if np.any(degree == 0):
+        raise ValueError("mesh contains a vertex with no 1-ring neighbors.")
+    neighbor_average = sparse.diags(1.0 / degree) @ adjacency
+
+    if verbose:
+        print(
+            "[Attack] メッシュLaplacianスムージング: "
+            f"lambda={lambda_val}, iterations={iterations}"
+        )
+    smoothed = xyz.copy()
+    for _ in range(iterations):
+        smoothed += lambda_val * (neighbor_average @ smoothed - smoothed)
+    return smoothed
 
 def downsampling_attack(
     xyz,

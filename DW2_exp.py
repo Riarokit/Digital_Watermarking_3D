@@ -30,8 +30,8 @@ VERBOSE_TRIAL_LOGS = False
 # 使用可能: "ElZein", "Hu", "Verma", "Proposed"
 # 例: COMPARED_METHODS = ["ElZein", "Proposed"]
 COMPARED_METHODS = [
-    # "ElZein",
-    # "Hu",
+    "ElZein",
+    "Hu",
     # "Verma",
     "Proposed",
 ]
@@ -48,7 +48,6 @@ EXPERIMENTS = [
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
 SMOOTHING_LAMBDA = 0.5
-SMOOTHING_K = 6
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
@@ -61,9 +60,7 @@ PROPOSED_CORRESPONDENCE_MODE = "1to1"
 PROPOSED_INDEX_DISTANCE_FACTOR = 30.0
 PROPOSED_COORDINATE_DISTANCE_FACTOR = 30.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
-# Nearest-neighbor candidate counts tried successively by the assignment solver.
 PROPOSED_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
-# 0: auto (1 process below 100k original points, otherwise at most 4).
 PROPOSED_ONE_TO_ONE_WORKERS = 0
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
@@ -72,7 +69,7 @@ BANDS = [
     ("All", 0.0, 1.0, 1.6e-3),
     ("Low", 0.0, 0.2, 3.6e-3),
     ("High", 0.8, 1.0, 3.6e-3),
-    ("DualBand", None, None, None),
+    # ("DualBand", None, None, None),
 ]
 DUAL_BAND_LOW_RANGE = (0.0, 0.2)
 DUAL_BAND_HIGH_RANGE = (0.6, 1.0)
@@ -119,11 +116,11 @@ def apply_attack(vertices, triangles, attack_type, parameter, seed):
         )
         return attacked, np.asarray(triangles).copy()
     if attack_type == "smoothing":
-        attacked = DW2F.smoothing_attack(
+        attacked = DW2F.mesh_laplacian_smoothing_attack(
             vertices,
+            triangles,
             lambda_val=SMOOTHING_LAMBDA,
             iterations=int(parameter),
-            k=SMOOTHING_K,
         )
         return attacked, np.asarray(triangles).copy()
     if attack_type == "cropping":
