@@ -21,8 +21,8 @@ INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
-NUM_EMBEDDING_TRIALS = 5
-NUM_ATTACK_TRIALS = 5
+NUM_EMBEDDING_TRIALS = 3
+NUM_ATTACK_TRIALS = 3
 EMBEDDING_SEED_BASE = 42
 ATTACK_SEED_BASE = 42
 VERBOSE_TRIAL_LOGS = False
@@ -38,7 +38,7 @@ COMPARED_METHODS = [
 
 EXPERIMENTS = [
     # ("noise", [0.5, 1.0, 1.5]),
-    ("smoothing", [10, 30, 50]),
+    ("smoothing", [50]),
     # ("cropping", [0.7, 0.5, 0.3]),
     # ("reordering", [0.1, 0.5, 1.0]),
     # ("downsampling", [0.8, 1.0, 1.2]),
@@ -47,7 +47,7 @@ EXPERIMENTS = [
 
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.1
+SMOOTHING_LAMBDA = 0.3
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
@@ -711,10 +711,10 @@ def print_robustness_table(
     parameter_labels = [str(parameter) for parameter in parameters]
     method_width = max(20, *(len(label) for label in method_labels))
     value_width = max(12, *(len(label) for label in parameter_labels))
-    print(
-        f"\nRobustness: {attack_type}, BER, "
-        f"attack trials={attack_trial_count(attack_type)}"
-    )
+    attack_details = f"attack trials={attack_trial_count(attack_type)}"
+    if attack_type == "smoothing":
+        attack_details += f", lambda={SMOOTHING_LAMBDA}"
+    print(f"\nRobustness: {attack_type}, BER, {attack_details}")
     print(
         "Embedding variants: "
         + ", ".join(
