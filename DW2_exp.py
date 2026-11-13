@@ -21,8 +21,8 @@ INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
-NUM_EMBEDDING_TRIALS = 3
-NUM_ATTACK_TRIALS = 3
+NUM_EMBEDDING_TRIALS = 5
+NUM_ATTACK_TRIALS = 5
 EMBEDDING_SEED_BASE = 42
 ATTACK_SEED_BASE = 42
 VERBOSE_TRIAL_LOGS = False
@@ -37,17 +37,17 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [1.0]),
-    ("smoothing", [50]),
+    # ("noise", [0.5, 1.0, 1.5]),
+    ("smoothing", [10, 30, 50]),
     # ("cropping", [0.7, 0.5, 0.3]),
     # ("reordering", [0.1, 0.5, 1.0]),
-    ("downsampling", [1.0]),
+    # ("downsampling", [0.8, 1.0, 1.2]),
     # ("visual_quality", [None]),
 ]
 
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.5
+SMOOTHING_LAMBDA = 0.1
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
@@ -61,7 +61,7 @@ PROPOSED_INDEX_DISTANCE_FACTOR = 30.0
 PROPOSED_COORDINATE_DISTANCE_FACTOR = 30.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
 PROPOSED_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
-PROPOSED_ONE_TO_ONE_WORKERS = 0
+PROPOSED_ONE_TO_ONE_WORKERS = 8
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
 CLUSTER_POINTS_PROPOSED = [2000]

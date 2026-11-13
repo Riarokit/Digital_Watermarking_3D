@@ -37,18 +37,19 @@ if __name__ == "__main__":
     max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
     correspondence_mode = "1to1"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
-    one_to_one_workers = 0  # auto: serial for Bunny, up to 4 processes when large
+    one_to_one_workers = 8  # auto: serial for Bunny, up to 4 processes when large
+    one_to_one_strategy = "exact"  # "exact" or experimental "hybrid"
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化
     show = True
 
     # Bunny全周波用
-    beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
+    # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
     # beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
-    # beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
+    beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
     # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
@@ -101,10 +102,10 @@ if __name__ == "__main__":
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
     # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=3.0, mode='gaussian', seed=42)
+    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.0, mode='gaussian', seed=42)
 
     # OP. スムージング攻撃
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=1.0, iterations=50, k=6)
+    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=50, k=6)
 
     # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
     # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.2, mode='axis', axis=0)
@@ -126,6 +127,7 @@ if __name__ == "__main__":
         max_index_inconsistency_ratio=max_index_inconsistency_ratio,
         correspondence_mode=correspondence_mode,
         one_to_one_candidates=one_to_one_candidates,
+        one_to_one_strategy=one_to_one_strategy,
         one_to_one_workers=one_to_one_workers,
     )
     extract_time = time.time() - start
