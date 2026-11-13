@@ -20,6 +20,16 @@ if __name__ == "__main__":
     correspondence_mode = "1to1"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
     one_to_one_workers = 0
+    # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")
+    attack_type = "smoothing"
+    attack_parameter = 50
+    attack_seed = 42
+    # 攻撃詳細モード
+    noise_mode = "gaussian"
+    smoothing_lambda = 0.2
+    cropping_mode = "axis"
+    cropping_axis = 0
+    downsampling_mode = "voxel"
 
     # 1. データ取得
     image_path = "watermark16.bmp"
@@ -64,26 +74,18 @@ if __name__ == "__main__":
     embed_time = time.time() - start_embed
     triangles_after = triangles.copy()
 
-    # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=3.0, mode="gaussian", seed=42)
-
-    # OP. スムージング攻撃
-    # xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=1.0, iterations=30, k=6)
-
-    # OP. 切り取り攻撃
-    xyz_after, triangles_after = DW2F.cropping_attack(
-        xyz_after, keep_ratio=0.5, mode="axis", axis=0, triangles=triangles_after
+    xyz_after, triangles_after = DW2F.apply_mesh_attack(
+        xyz_after,
+        triangles_after,
+        attack_type,
+        attack_parameter,
+        attack_seed,
+        noise_mode=noise_mode,
+        smoothing_lambda=smoothing_lambda,
+        cropping_mode=cropping_mode,
+        cropping_axis=cropping_axis,
+        downsampling_mode=downsampling_mode,
     )
-
-    # OP. ダウンサンプリング攻撃
-    # xyz_after, triangles_after = DW2F.downsampling_attack(
-    #     xyz_after, mode="voxel", voxel_size_percent=1.5, seed=42, triangles=triangles_after
-    # )
-
-    # OP. 頂点順序攻撃
-    # xyz_after, triangles_after = DW2F.vertex_reordering_attack(
-    #     xyz_after, reorder_ratio=1.0, seed=42, triangles=triangles_after
-    # )
 
     # 5. 抽出処理
     start_extract = time.time()

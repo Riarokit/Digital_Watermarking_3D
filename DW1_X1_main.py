@@ -38,24 +38,33 @@ if __name__ == "__main__":
     correspondence_mode = "1to1"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
     one_to_one_workers = 8  # auto: serial for Bunny, up to 4 processes when large
-    one_to_one_strategy = "exact"  # "exact" or experimental "hybrid"
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化
     show = True
+    # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")
+    attack_type = "smoothing"
+    attack_parameter = 30
+    attack_seed = 42
+    # 攻撃詳細モード
+    noise_mode = "gaussian"
+    smoothing_lambda = 0.1
+    cropping_mode = "axis"
+    cropping_axis = 0
+    downsampling_mode = "voxel"
 
     # Bunny全周波用
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
     # beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
-    beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
+    # beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
     # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
     # beta = 2.9e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
     # Dragon高周波用
-    # beta = 2.9e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
+    beta = 2.9e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Armadillo全周波用
     # beta = 1.68e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
     # Armadillo低周波用
@@ -65,13 +74,22 @@ if __name__ == "__main__":
 
     # 1. データ取得
     image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
-    pcd_before = o3d.io.read_point_cloud(input_file)
+    mesh_before = o3d.io.read_triangle_mesh(input_file)
+    if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
+        raise ValueError("Proposed method robustness tests require a triangle mesh.")
 
     # 2. 前処理（色情報追加・理想クラスタ数計算）
+    raw_vertices = np.asarray(mesh_before.vertices)
+    raw_triangles = np.asarray(mesh_before.triangles)
+    xyz, triangles, _ = DW2F.remove_unreferenced_vertices(
+        raw_vertices, raw_triangles
+    )
+    pcd_before = o3d.geometry.PointCloud()
+    pcd_before.points = o3d.utility.Vector3dVector(xyz)
     pcd_before = DW2F.normalize_point_cloud(pcd_before)
     pcd_before = DW2F.add_colors(pcd_before, color="grad")
-    xyz = np.asarray(pcd_before.points)
-    colors = np.asarray(pcd_before.colors)
+    xyz = np.asarray(pcd_before.points).copy()
+    colors = np.asarray(pcd_before.colors).copy()
     if show:
         o3d.visualization.draw_geometries([pcd_before])
 
@@ -101,20 +119,19 @@ if __name__ == "__main__":
     max_embed_shift = np.max(diffs)
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
-    # OP. ノイズ攻撃
-    # xyz_after = DW2F.noise_addition_attack(xyz_after, noise_percent=1.0, mode='gaussian', seed=42)
-
-    # OP. スムージング攻撃
-    xyz_after = DW2F.smoothing_attack(xyz_after, lambda_val=0.3, iterations=50, k=6)
-
-    # OP. 切り取り攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW2F.cropping_attack(xyz_after, keep_ratio=0.2, mode='axis', axis=0)
-
-    # OP. ダウンサンプリング攻撃 (不可視性評価はコメントアウト)
-    # xyz_after = DW2F.downsampling_attack(xyz_after, mode='voxel', voxel_size_percent=1.2, seed=42)
-
-    # OP. 頂点順序攻撃
-    # xyz_after = DW2F.vertex_reordering_attack(xyz_after, reorder_ratio=0.01, seed=42)
+    triangles_after = triangles.copy()
+    xyz_after, triangles_after = DW2F.apply_mesh_attack(
+        xyz_after,
+        triangles_after,
+        attack_type,
+        attack_parameter,
+        attack_seed,
+        noise_mode=noise_mode,
+        smoothing_lambda=smoothing_lambda,
+        cropping_mode=cropping_mode,
+        cropping_axis=cropping_axis,
+        downsampling_mode=downsampling_mode,
+    )
 
     # 6. 単多数決方式の抽出
     start = time.time()
@@ -127,7 +144,6 @@ if __name__ == "__main__":
         max_index_inconsistency_ratio=max_index_inconsistency_ratio,
         correspondence_mode=correspondence_mode,
         one_to_one_candidates=one_to_one_candidates,
-        one_to_one_strategy=one_to_one_strategy,
         one_to_one_workers=one_to_one_workers,
     )
     extract_time = time.time() - start
@@ -146,8 +162,7 @@ if __name__ == "__main__":
         if not show:
             DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
     if show:
-        # DW2F.visualize_embedded_points(xyz, xyz_after)
-        pcd_after = DW2F.add_colors(pcd_after, color="grad")
+        DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
         o3d.visualization.draw_geometries([pcd_after])
 
     # 8. ロバスト性評価

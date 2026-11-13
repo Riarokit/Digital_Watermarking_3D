@@ -67,7 +67,6 @@ ONE_TO_ONE_USE_FEASIBILITY_PREFILTER = True
 _ONE_TO_ONE_WORKER_TREE = None
 _ONE_TO_ONE_WORKER_ORIGINAL = None
 _ONE_TO_ONE_WORKER_CANDIDATES = None
-_ONE_TO_ONE_WORKER_STRATEGY = None
 
 # =========================================================
 #  クラスタリング関数群
@@ -1013,28 +1012,6 @@ def _one_to_one_candidate_graph(distances, candidate_global):
     return graph, candidates
 
 
-def _residual_candidate_graph(distances, candidate_global, rows, locked_candidates):
-    """Build a sparse graph for unresolved rows after unique-NN locking."""
-    residual_distances = distances[rows]
-    residual_candidates = candidate_global[rows]
-    allowed = ~np.isin(residual_candidates, locked_candidates)
-    local_rows, candidate_positions = np.nonzero(allowed)
-    selected_candidates = residual_candidates[allowed]
-    candidates = np.unique(selected_candidates)
-    if len(candidates) < len(rows):
-        return None, None
-    graph = csr_matrix(
-        (
-            np.maximum(
-                residual_distances[local_rows, candidate_positions] ** 2, 1e-15
-            ),
-            (local_rows, np.searchsorted(candidates, selected_candidates)),
-        ),
-        shape=(len(rows), len(candidates)),
-    )
-    return graph, candidates
-
-
 def _bipartite_component_capacity_ok(graph):
     """Fast necessary condition for a full row matching.
 
@@ -1070,9 +1047,6 @@ def _solve_one_to_one_cluster(
         "feasibility_seconds": 0.0,
         "min_cost_seconds": 0.0,
         "attempts": [],
-        "locked_rows": 0,
-        "residual_rows": 0,
-        "hybrid_clusters": 0,
     }
     # Reuse each KD query for its candidate prefixes.  This preserves the fixed
     # 8,16,32,64,128 schedule while avoiding five independent neighbor queries.
@@ -1156,117 +1130,18 @@ def _solve_one_to_one_cluster(
     )
 
 
-def _solve_one_to_one_cluster_hybrid(
-    tree, xyz_orig, cluster_id, rows, candidate_counts
-):
-    """Fast experimental 1:1 matcher: unique NN locks plus residual optimum.
-
-    Every returned assignment remains bijective within the GFT cluster.  Unlike
-    ``_solve_one_to_one_cluster``, unique nearest-neighbour locks need not be
-    the global min-squared-distance assignment, so this is an experimental
-    decoder backend and is benchmarked against the exact default.
-    """
-    profile = {
-        "query_seconds": 0.0,
-        "graph_seconds": 0.0,
-        "capacity_seconds": 0.0,
-        "capacity_rejections": 0,
-        "feasibility_seconds": 0.0,
-        "min_cost_seconds": 0.0,
-        "attempts": [],
-        "locked_rows": 0,
-        "residual_rows": 0,
-        "hybrid_clusters": 1,
-    }
-    stages = (
-        tuple(value for value in candidate_counts if value <= 16),
-        tuple(value for value in candidate_counts if value > 16),
-    )
-    for stage in stages:
-        if not stage:
-            continue
-        maximum = min(max(stage), tree.n)
-        started = time.perf_counter()
-        distances_all, candidates_all = tree.query(xyz_orig[rows], k=maximum)
-        profile["query_seconds"] += time.perf_counter() - started
-        if maximum == 1:
-            distances_all = distances_all[:, None]
-            candidates_all = candidates_all[:, None]
-        for requested_count in stage:
-            candidate_count = min(requested_count, maximum)
-            distances = distances_all[:, :candidate_count]
-            candidate_global = candidates_all[:, :candidate_count]
-            nearest = candidate_global[:, 0]
-            _, inverse, counts = np.unique(
-                nearest, return_inverse=True, return_counts=True
-            )
-            locked_mask = counts[inverse] == 1
-            locked_rows = np.flatnonzero(locked_mask)
-            residual_rows = np.flatnonzero(~locked_mask)
-            assigned = np.full(len(rows), -1, dtype=np.int64)
-            assigned[locked_rows] = nearest[locked_rows]
-            profile["locked_rows"] += len(locked_rows)
-            profile["residual_rows"] += len(residual_rows)
-            if len(residual_rows) == 0:
-                profile["attempts"].append((candidate_count, True, 0.0, 0.0))
-                return rows, assigned, candidate_count, profile
-            started = time.perf_counter()
-            graph, candidates = _residual_candidate_graph(
-                distances, candidate_global, residual_rows, nearest[locked_rows]
-            )
-            profile["graph_seconds"] += time.perf_counter() - started
-            if graph is None:
-                profile["attempts"].append((candidate_count, False, 0.0, 0.0))
-                continue
-            try:
-                started = time.perf_counter()
-                local_rows, local_columns = min_weight_full_bipartite_matching(
-                    graph
-                )
-                min_cost_seconds = time.perf_counter() - started
-                profile["min_cost_seconds"] += min_cost_seconds
-            except ValueError:
-                min_cost_seconds = time.perf_counter() - started
-                profile["min_cost_seconds"] += min_cost_seconds
-                profile["attempts"].append(
-                    (candidate_count, False, 0.0, min_cost_seconds)
-                )
-                continue
-            if len(local_rows) != len(residual_rows):
-                profile["attempts"].append(
-                    (candidate_count, False, 0.0, min_cost_seconds)
-                )
-                continue
-            assigned[residual_rows[local_rows]] = candidates[local_columns]
-            profile["attempts"].append(
-                (candidate_count, True, 0.0, min_cost_seconds)
-            )
-            return rows, assigned, candidate_count, profile
-    raise RuntimeError(
-        "hybrid 1to1 could not match original cluster "
-        f"{cluster_id} with candidates={candidate_counts}."
-    )
-
-
-def _initialize_one_to_one_worker(xyz_att, xyz_orig, candidate_counts, strategy):
+def _initialize_one_to_one_worker(xyz_att, xyz_orig, candidate_counts):
     global _ONE_TO_ONE_WORKER_TREE
     global _ONE_TO_ONE_WORKER_ORIGINAL
     global _ONE_TO_ONE_WORKER_CANDIDATES
-    global _ONE_TO_ONE_WORKER_STRATEGY
     _ONE_TO_ONE_WORKER_TREE = cKDTree(xyz_att)
     _ONE_TO_ONE_WORKER_ORIGINAL = xyz_orig
     _ONE_TO_ONE_WORKER_CANDIDATES = candidate_counts
-    _ONE_TO_ONE_WORKER_STRATEGY = strategy
 
 
 def _solve_one_to_one_worker(task):
     cluster_id, rows = task
-    solver = (
-        _solve_one_to_one_cluster
-        if _ONE_TO_ONE_WORKER_STRATEGY == "exact"
-        else _solve_one_to_one_cluster_hybrid
-    )
-    return solver(
+    return _solve_one_to_one_cluster(
         _ONE_TO_ONE_WORKER_TREE,
         _ONE_TO_ONE_WORKER_ORIGINAL,
         cluster_id,
@@ -1286,9 +1161,6 @@ def _one_to_one_profile_summary(results):
         "capacity_rejections": 0,
         "feasibility_seconds": 0.0,
         "min_cost_seconds": 0.0,
-        "locked_rows": 0,
-        "residual_rows": 0,
-        "hybrid_clusters": 0,
     }
     for _, _, chosen_count, profile in results:
         selected[chosen_count] = selected.get(chosen_count, 0) + 1
@@ -1318,7 +1190,6 @@ def match_point_cloud_one_to_one(
     distance_factor=30.0,
     candidate_counts=ONE_TO_ONE_CANDIDATES,
     workers=0,
-    strategy="exact",
     verbose=True,
 ):
     """Match original points to received points by a local geometry-only bijection.
@@ -1354,9 +1225,6 @@ def match_point_cloud_one_to_one(
         )
     if distance_factor <= 0:
         raise ValueError("distance_factor must be positive.")
-    if strategy not in {"exact", "hybrid"}:
-        raise ValueError("strategy must be 'exact' or 'hybrid'.")
-
     candidate_counts = tuple(int(value) for value in candidate_counts)
     if (
         not candidate_counts
@@ -1372,11 +1240,7 @@ def match_point_cloud_one_to_one(
     ]
     worker_count = _one_to_one_worker_count(workers, len(xyz_orig), len(tasks))
     tree = cKDTree(xyz_att)
-    solver = (
-        _solve_one_to_one_cluster
-        if strategy == "exact"
-        else _solve_one_to_one_cluster_hybrid
-    )
+    solver = _solve_one_to_one_cluster
     if worker_count == 1:
         results = [
             solver(
@@ -1389,7 +1253,7 @@ def match_point_cloud_one_to_one(
             with ProcessPoolExecutor(
                 max_workers=worker_count,
                 initializer=_initialize_one_to_one_worker,
-                initargs=(xyz_att, xyz_orig, candidate_counts, strategy),
+                initargs=(xyz_att, xyz_orig, candidate_counts),
             ) as executor:
                 results = list(executor.map(
                     _solve_one_to_one_worker, tasks, chunksize=1
@@ -1449,7 +1313,6 @@ def match_point_cloud_one_to_one(
             "[1to1 profile] "
             f"clusters={len(results)}, selected={{ {selected_text} }}, "
             f"infeasible={{ {rejected_text} }}, workers={worker_count}, "
-            f"strategy={strategy}, "
             f"prefilter={'on' if ONE_TO_ONE_USE_FEASIBILITY_PREFILTER else 'off'}, "
             f"query={timings['query_seconds']:.3f}s, "
             f"graph={timings['graph_seconds']:.3f}s, "
@@ -1457,7 +1320,6 @@ def match_point_cloud_one_to_one(
             f"(rejected={timings['capacity_rejections']}), "
             f"feasibility={timings['feasibility_seconds']:.3f}s, "
             f"min_cost={timings['min_cost_seconds']:.3f}s",
-            f"locked={timings['locked_rows']}, residual={timings['residual_rows']}, "
             f"assignment={assignment_fingerprint}",
             file=sys.stderr,
         )
@@ -1575,7 +1437,6 @@ def align_attacked_vertices_to_original(
     correspondence_mode="auto",
     labels=None,
     one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
-    one_to_one_strategy="exact",
     verbose=True,
     one_to_one_workers=0,
 ):
@@ -1606,7 +1467,6 @@ def align_attacked_vertices_to_original(
                     distance_factor=coordinate_distance_factor,
                     candidate_counts=one_to_one_candidates,
                     workers=one_to_one_workers,
-                    strategy=one_to_one_strategy,
                     verbose=verbose,
                 )
                 return aligned, matched_mask
@@ -1682,7 +1542,6 @@ def extract_watermark_x1(
     max_index_inconsistency_ratio: float = 0.01,
     correspondence_mode: str = "auto",
     one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
-    one_to_one_strategy="exact",
     one_to_one_workers: int = 0,
 ):
     """
@@ -1705,7 +1564,6 @@ def extract_watermark_x1(
             correspondence_mode=correspondence_mode,
             labels=labels,
             one_to_one_candidates=one_to_one_candidates,
-            one_to_one_strategy=one_to_one_strategy,
             one_to_one_workers=one_to_one_workers,
             verbose=True,
         )
@@ -1800,7 +1658,6 @@ def extract_watermark_x1_dualband(
     max_index_inconsistency_ratio=0.01,
     correspondence_mode="1to1",
     one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
-    one_to_one_strategy="exact",
     low_band=DUAL_BAND_LOW_RANGE,
     high_band=DUAL_BAND_HIGH_RANGE,
     code_key=DUAL_BAND_CODE_KEY,
@@ -1832,7 +1689,6 @@ def extract_watermark_x1_dualband(
         correspondence_mode=correspondence_mode,
         labels=labels,
         one_to_one_candidates=one_to_one_candidates,
-        one_to_one_strategy=one_to_one_strategy,
         one_to_one_workers=one_to_one_workers,
         verbose=True,
     )

@@ -47,7 +47,7 @@ EXPERIMENTS = [
 
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.3
+SMOOTHING_LAMBDA = 0.2
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
@@ -110,42 +110,20 @@ def embedding_quality(vertices, marked_vertices):
 
 
 def apply_attack(vertices, triangles, attack_type, parameter, seed):
-    if attack_type == "noise":
-        attacked = DW2F.noise_addition_attack(
-            vertices, noise_percent=parameter, mode=NOISE_MODE, seed=seed
-        )
-        return attacked, np.asarray(triangles).copy()
-    if attack_type == "smoothing":
-        attacked = DW2F.mesh_laplacian_smoothing_attack(
-            vertices,
-            triangles,
-            lambda_val=SMOOTHING_LAMBDA,
-            iterations=int(parameter),
-        )
-        return attacked, np.asarray(triangles).copy()
-    if attack_type == "cropping":
-        return DW2F.cropping_attack(
-            vertices,
-            keep_ratio=parameter,
-            mode=CROPPING_MODE,
-            axis=CROPPING_AXIS,
-            triangles=triangles,
-        )
-    if attack_type == "downsampling":
-        return DW2F.downsampling_attack(
-            vertices,
-            mode=DOWNSAMPLING_MODE,
-            voxel_size_percent=parameter,
-            seed=seed,
-            triangles=triangles,
-        )
-    if attack_type == "reordering":
-        return DW2F.vertex_reordering_attack(
-            vertices, reorder_ratio=parameter, seed=seed, triangles=triangles
-        )
     if attack_type == "visual_quality":
         return np.asarray(vertices).copy(), np.asarray(triangles).copy()
-    raise ValueError(f"Unknown experiment type: {attack_type}")
+    return DW2F.apply_mesh_attack(
+        vertices,
+        triangles,
+        attack_type,
+        parameter,
+        seed,
+        noise_mode=NOISE_MODE,
+        smoothing_lambda=SMOOTHING_LAMBDA,
+        cropping_mode=CROPPING_MODE,
+        cropping_axis=CROPPING_AXIS,
+        downsampling_mode=DOWNSAMPLING_MODE,
+    )
 
 
 def run_trial_call(function, *args, **kwargs):

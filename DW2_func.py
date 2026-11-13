@@ -823,6 +823,74 @@ def evaluate_point_ssim(pcd_before, pcd_after, attribute='geometry', dispersion=
 #  攻撃関数群
 # =========================================================
 
+def apply_mesh_attack(
+    vertices,
+    triangles,
+    attack_type,
+    parameter,
+    seed=None,
+    *,
+    noise_mode="gaussian",
+    smoothing_lambda=0.3,
+    cropping_mode="axis",
+    cropping_axis=0,
+    downsampling_mode="voxel",
+):
+    """Apply one reproducible, topology-preserving mesh attack.
+
+    This is the shared attack entry point for the individual method runners
+    and ``DW2_exp.py``.  Every attack accepts and returns both vertices and
+    triangles, so a point-cloud-only attack path cannot accidentally be used
+    in a mesh robustness experiment.
+    """
+    vertices = np.asarray(vertices, dtype=np.float64)
+    triangles = np.asarray(triangles, dtype=np.int64)
+    if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) == 0:
+        raise ValueError("vertices must have shape (N, 3) and be non-empty.")
+    if triangles.ndim != 2 or triangles.shape[1] != 3 or len(triangles) == 0:
+        raise ValueError("triangles must have shape (M, 3) and be non-empty.")
+
+    if attack_type == "none":
+        return vertices.copy(), triangles.copy()
+    if attack_type == "noise":
+        return (
+            noise_addition_attack(
+                vertices, noise_percent=parameter, mode=noise_mode, seed=seed
+            ),
+            triangles.copy(),
+        )
+    if attack_type == "smoothing":
+        return (
+            mesh_laplacian_smoothing_attack(
+                vertices,
+                triangles,
+                lambda_val=smoothing_lambda,
+                iterations=int(parameter),
+            ),
+            triangles.copy(),
+        )
+    if attack_type == "cropping":
+        return cropping_attack(
+            vertices,
+            keep_ratio=parameter,
+            mode=cropping_mode,
+            axis=cropping_axis,
+            triangles=triangles,
+        )
+    if attack_type == "downsampling":
+        return downsampling_attack(
+            vertices,
+            mode=downsampling_mode,
+            voxel_size_percent=parameter,
+            seed=seed,
+            triangles=triangles,
+        )
+    if attack_type == "reordering":
+        return vertex_reordering_attack(
+            vertices, reorder_ratio=parameter, seed=seed, triangles=triangles
+        )
+    raise ValueError(f"Unknown mesh attack type: {attack_type}")
+
 def noise_addition_attack(xyz, noise_percent=1.0, mode='uniform', seed=None):
     """
     numpy配列(xyz)にノイズを加える
