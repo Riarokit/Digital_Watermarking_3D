@@ -9,8 +9,6 @@ imperceptibility based on EMD on surfaces", The Visual Computer, 2023.
 """
 
 from dataclasses import dataclass
-from itertools import permutations, product
-
 import numpy as np
 import open3d as o3d
 from scipy import sparse
@@ -30,8 +28,6 @@ class HuWatermarkKey:
     embedding_indices: np.ndarray
     embedding_positions: np.ndarray
     matching_threshold: float
-    embedding_signatures: np.ndarray
-    registration_threshold: float
     bit_indices: np.ndarray
     repetitions: np.ndarray
     watermark_size: int
@@ -390,18 +386,6 @@ def _nearest_neighbor_scale(points):
     return float(np.median(spacing)) if len(spacing) else 0.0
 
 
-def _canonical_coordinates(points):
-    """Remove translation, uniform scale, and PCA rotation for registration."""
-    points = np.asarray(points, dtype=np.float64)
-    centered = points - np.mean(points, axis=0)
-    scale = float(np.max(np.linalg.norm(centered, axis=1)))
-    if not np.isfinite(scale) or scale <= 1e-15:
-        raise ValueError("similarity registrationの座標正規化に失敗しました。")
-    normalized = centered / scale
-    _, eigenvectors = np.linalg.eigh(normalized.T @ normalized)
-    return normalized @ eigenvectors[:, ::-1]
-
-
 def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=25,
                             watermark_size=32, arnold_iterations=20, extreme_parameter=0.8,
                             epsilon=1e-4):
@@ -440,9 +424,7 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
 
     scale = np.divide(rho_new, rho, out=np.zeros_like(rho_new), where=rho > 1e-15)
     watermarked = centered * scale[:, None] + np.mean(vertices, axis=0)
-    canonical_watermarked = _canonical_coordinates(watermarked)
     raw_extent = np.linalg.norm(np.ptp(watermarked, axis=0))
-    canonical_extent = np.linalg.norm(np.ptp(canonical_watermarked, axis=0))
     key = HuWatermarkKey(
         embedding_indices=embedding_indices,
         embedding_positions=watermarked[embedding_indices].copy(),
@@ -450,11 +432,6 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
         # multiplies it by coordinate_distance_factor to obtain the threshold.
         matching_threshold=max(
             _nearest_neighbor_scale(watermarked), raw_extent * 1e-5
-        ),
-        embedding_signatures=canonical_watermarked[embedding_indices].copy(),
-        registration_threshold=max(
-            _nearest_neighbor_scale(canonical_watermarked),
-            canonical_extent * 1e-5,
         ),
         bit_indices=bit_indices,
         repetitions=reps,
@@ -510,7 +487,6 @@ def _match_embedding_positions(
     key,
     coordinate_distance_factor,
     neighbors=16,
-    allow_similarity_registration=True,
 ):
     """保存キャリアを再検出した安定極値点へ一対一対応させる。
 
@@ -539,68 +515,8 @@ def _match_embedding_positions(
         neighbors=neighbors,
     )
     best_valid = best_local_indices >= 0
-    best_count = int(np.count_nonzero(best_valid))
-    best_error = (
-        float(np.median(best_distances[best_valid])) / raw_threshold
-        if best_count
-        else np.inf
-    )
     best_mode = "raw"
     best_threshold = raw_threshold
-
-    raw_median_distance = (
-        float(np.median(best_distances[best_valid])) if best_count else np.inf
-    )
-    raw_is_confident = (
-        best_count == len(key.embedding_positions)
-        and raw_median_distance <= 2.0 * key.matching_threshold
-    )
-    if not allow_similarity_registration or raw_is_confident:
-        matched = np.full(len(key.embedding_positions), -1, dtype=np.int64)
-        matched[best_valid] = candidate_indices[best_local_indices[best_valid]]
-        return (
-            matched,
-            best_valid,
-            best_distances,
-            len(candidate_indices),
-            best_mode,
-            best_threshold,
-        )
-
-    # Algorithm 2 requires registration for a similarity-transformed model.
-    # PCA removes translation, uniform scale, and rotation.  PCA axes have an
-    # unavoidable permutation/sign ambiguity, so all 48 discrete orientations
-    # are evaluated and the match with maximum coverage/minimum error is used.
-    canonical_vertices = _canonical_coordinates(vertices)
-    registration_threshold = (
-        key.registration_threshold * coordinate_distance_factor
-    )
-    canonical_candidates = canonical_vertices[candidate_indices]
-    for permutation in permutations(range(3)):
-        permuted = canonical_candidates[:, permutation]
-        for signs in product((-1.0, 1.0), repeat=3):
-            registered_candidates = permuted * np.asarray(signs)
-            local_indices, distances = _greedy_unique_match(
-                key.embedding_signatures,
-                registered_candidates,
-                registration_threshold,
-                neighbors=neighbors,
-            )
-            valid = local_indices >= 0
-            count = int(np.count_nonzero(valid))
-            error = (
-                float(np.median(distances[valid])) / registration_threshold
-                if count
-                else np.inf
-            )
-            if count > best_count or (count == best_count and error < best_error):
-                best_local_indices = local_indices
-                best_distances = distances
-                best_valid = valid
-                best_count = count
-                best_error = error
-                best_mode = "similarity-registration"
-                best_threshold = registration_threshold
 
     matched = np.full(len(key.embedding_positions), -1, dtype=np.int64)
     matched[best_valid] = candidate_indices[best_local_indices[best_valid]]
@@ -626,8 +542,7 @@ def extract_watermark_hu_mesh(
     """論文 Algorithm 2、式 (12)、式 (13) に基づいて透かしを抽出する。
 
     ``coordinate`` は保存した埋め込み極値座標と、攻撃後に再検出した安定極値を
-    距離制約付きで一対一対応させる。Algorithm 2に従い、平行移動・一様拡大縮小・
-    回転を除いたsimilarity registrationも評価する。``index`` は比較実験用であり、
+    距離制約付きで一対一対応させる。``index`` は比較実験用であり、
     頂点番号に依存しない評価では ``coordinate`` を使用する。
     """
     if not isinstance(key_info, HuWatermarkKey):
@@ -694,7 +609,7 @@ def extract_watermark_hu_mesh(
             valid_carriers,
             matched_distances,
             candidate_count,
-            registration_mode,
+            matching_mode,
             matching_threshold,
         ) = (
             _match_embedding_positions(
@@ -704,7 +619,6 @@ def extract_watermark_hu_mesh(
                 key_info,
                 coordinate_distance_factor=coordinate_distance_factor,
                 neighbors=int(coordinate_neighbors),
-                allow_similarity_registration=preserves_original_vertices,
             )
         )
         if verbose:
@@ -716,7 +630,7 @@ def extract_watermark_hu_mesh(
             )
             print(
                 f"[Hu] correspondence=coordinate, "
-                f"registration={registration_mode}, "
+                f"matching={matching_mode}, "
                 f"stable_extrema={candidate_count}, "
                 f"matched={np.count_nonzero(valid_carriers)}/{len(matched)}, "
                 f"threshold={matching_threshold:.6g}, "

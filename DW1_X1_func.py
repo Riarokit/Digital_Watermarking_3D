@@ -59,9 +59,9 @@ ONE_TO_ONE_AUTO_WORKER_THRESHOLD = 100_000
 ONE_TO_ONE_MODES = ("hk", "auction", "bidir")
 CORRESPONDENCE_MODES = ("auto", "index", "coordinate") + ONE_TO_ONE_MODES
 BIDIRECTIONAL_CANDIDATES = (8, 16, 32)
-# Temporary investigation switch.  The summary is deliberately emitted to
-# stderr so DW2_exp's stdout suppression does not hide correspondence timing.
-ONE_TO_ONE_PROFILE_LOGS = True
+# Enable only when profiling correspondence internals.  The summary is emitted
+# to stderr so DW2_exp's stdout suppression does not hide it.
+ONE_TO_ONE_PROFILE_LOGS = False
 
 # =========================================================
 #  クラスタリング関数群

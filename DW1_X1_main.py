@@ -36,16 +36,16 @@ if __name__ == "__main__":
     coordinate_distance_factor = 30.0     # 座標・曲面対応の許容距離倍率
     max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
     # auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
-    correspondence_mode = "hk"
+    correspondence_mode = "bidir"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
-    one_to_one_workers = 8  # 0: auto (small=serial, large=up to 8 threads)
+    one_to_one_workers = 0  # 0: auto (small=serial, large=up to 8 threads)
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化
     show = True
     # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")
-    attack_type = "smoothing"
-    attack_parameter = 30
+    attack_type = "downsampling"
+    attack_parameter = 1.0
     attack_seed = 42
     # 攻撃詳細モード
     noise_mode = "gaussian"
@@ -63,9 +63,9 @@ if __name__ == "__main__":
     # Dragon全周波用
     # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
-    # beta = 2.9e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
+    beta = 2.9e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
     # Dragon高周波用
-    beta = 2.9e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
+    # beta = 2.9e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Armadillo全周波用
     # beta = 1.68e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
     # Armadillo低周波用

@@ -25,12 +25,12 @@ if __name__ == "__main__":
     hu_coordinate_distance_factor = 5.0
     show = True
     # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")
-    attack_type = "smoothing"
-    attack_parameter = 50
+    attack_type = "downsampling"
+    attack_parameter = 1.0
     attack_seed = 42
     # 攻撃詳細モード
     noise_mode = "gaussian"
-    smoothing_lambda = 0.2
+    smoothing_lambda = 0.1
     cropping_mode = "axis"
     cropping_axis = 0
     downsampling_mode = "voxel"
@@ -38,8 +38,8 @@ if __name__ == "__main__":
     # ======================
     # 1. データ取得
     image_path = "watermark16.bmp"
-    input_file = "C:/bun_zipper.ply"
-    # input_file = "C:/dragon.ply"
+    # input_file = "C:/bun_zipper.ply"
+    input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:

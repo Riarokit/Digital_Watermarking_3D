@@ -16,13 +16,13 @@ import DW2_func as DW2F
 
 # 共通設定
 TARGET_PSNR = 60.0
-INPUT_FILE = "C:/bun_zipper.ply"
+# INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/dragon.ply"
-# INPUT_FILE = "C:/Armadillo.ply"
+INPUT_FILE = "C:/Armadillo.ply"
 IMAGE_PATH = "watermark16.bmp"
 WATERMARK_SIZE = 16
-NUM_EMBEDDING_TRIALS = 3
-NUM_ATTACK_TRIALS = 3
+NUM_EMBEDDING_TRIALS = 5
+NUM_ATTACK_TRIALS = 5
 EMBEDDING_SEED_BASE = 42
 ATTACK_SEED_BASE = 42
 VERBOSE_TRIAL_LOGS = False
@@ -37,8 +37,8 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [0.8, 1.0, 1.2]),
-    ("smoothing", [10, 20, 30]),
+    ("noise", [0.5, 0.8, 1.0]),
+    ("smoothing", [10, 30, 50]),
     ("cropping", [0.7, 0.5, 0.3]),
     ("reordering", [0.1, 0.5, 1.0]),
     ("downsampling", [0.8, 1.0, 1.2]),
@@ -57,7 +57,7 @@ GRAPH_MODE = "knn"
 KNN_K = 24
 GRAPH_RADIUS = 0.03
 # auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
-PROPOSED_CORRESPONDENCE_MODE = "hk"
+PROPOSED_CORRESPONDENCE_MODE = "bidir"
 PROPOSED_INDEX_DISTANCE_FACTOR = 30.0
 PROPOSED_COORDINATE_DISTANCE_FACTOR = 30.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
@@ -84,7 +84,7 @@ HU_CORRESPONDENCE_MODE = "coordinate"  # auto, index, or coordinate
 HU_COORDINATE_DISTANCE_FACTOR = 30.0
 
 # El Zein手法
-ELZEIN_CORRESPONDENCE_MODE = "hk"  # auto / index / coordinate / hk / auction / bidir
+ELZEIN_CORRESPONDENCE_MODE = "bidir"  # auto / index / coordinate / hk / auction / bidir
 ELZEIN_INDEX_DISTANCE_FACTOR = 30.0
 ELZEIN_COORDINATE_DISTANCE_FACTOR = 30.0
 ELZEIN_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
