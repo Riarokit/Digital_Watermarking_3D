@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
     correspondence_mode = "hk"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
-    one_to_one_workers = 8  # 0: auto (small=serial, large=up to 4 threads)
+    one_to_one_workers = 8  # 0: auto (small=serial, large=up to 8 threads)
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化

@@ -1237,7 +1237,7 @@ def _one_to_one_worker_count(requested_workers, point_count, cluster_count):
     if requested_workers == 0:
         if point_count < ONE_TO_ONE_AUTO_WORKER_THRESHOLD:
             return 1
-        requested_workers = min(4, os.cpu_count() or 1)
+        requested_workers = min(8, os.cpu_count() or 1)
     return max(1, min(requested_workers, cluster_count))
 
 
@@ -1263,7 +1263,7 @@ def match_point_cloud_one_to_one(
     received point. Arrays may have different row counts (El Zein carriers).
     The alignment wrapper handles count reduction by coordinate fallback.
 
-    ``workers=0`` uses serial execution below 100,000 points and up to four
+    ``workers=0`` uses serial execution below 100,000 points and up to eight
     threads above it. Explicit workers are capped by the number of clusters.
     HK/auction JIT warmup happens before starting cluster threads.
     """
