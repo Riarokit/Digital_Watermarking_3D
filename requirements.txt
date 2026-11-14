@@ -1,5 +1,7 @@
 open3d
 numpy
+scipy
+numba
 scikit-learn
 scikit-fuzzy
 matplotlib

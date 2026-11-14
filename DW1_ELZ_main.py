@@ -17,7 +17,7 @@ if __name__ == "__main__":
     a = 4.49e-3  # Dragon用
     # a = 3.21e-3  # Armadillo用
     show = True
-    correspondence_mode = "1to1"
+    correspondence_mode = "hk"  # auto / index / coordinate / hk / auction / bidir
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
     one_to_one_workers = 0
     # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")

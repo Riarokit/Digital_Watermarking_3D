@@ -14,6 +14,8 @@ from sklearn.cluster import KMeans
 
 from DW1_X1_func import (
     ONE_TO_ONE_CANDIDATES,
+    ONE_TO_ONE_MODES,
+    CORRESPONDENCE_MODES,
     align_attacked_vertices_to_original,
     match_point_cloud_one_to_one,
     repeat_bits_blockwise,
@@ -304,10 +306,12 @@ def extract_watermark_elzein_mesh(
 ):
     """対応付けたキャリアの座標差をグループ内多数決して抽出する。
 
-    ``1to1`` は、保存済みの各 El Zein キャリアクラスタ内で独立に
-    最小コストの1対1対応を求める。頂点数が変化した場合、または割当が
+    ``hk`` / ``auction`` / ``bidir`` は、保存済みの各 El Zein キャリア
+    クラスタ内で独立に1対1対応を求める。頂点数が変化した場合、または割当が
     成立しない場合は、coordinateの多対1対応へフォールバックする。
     """
+    if correspondence_mode not in CORRESPONDENCE_MODES:
+        raise ValueError(f"correspondence_mode must be one of {CORRESPONDENCE_MODES}.")
     original_vertices = np.asarray(original_vertices, dtype=float)
     if original_vertices.ndim != 2 or original_vertices.shape[1] != 3:
         raise ValueError("original_vertices must have shape (N, 3).")
@@ -319,7 +323,7 @@ def extract_watermark_elzein_mesh(
         raise ValueError(
             "original_vertices does not match the mesh used for embedding."
         )
-    if correspondence_mode == "1to1" and len(marked_vertices) == len(original_vertices):
+    if correspondence_mode in ONE_TO_ONE_MODES and len(marked_vertices) == len(original_vertices):
         carrier_indices = np.concatenate(carrier_clusters)
         carrier_labels = np.concatenate([
             np.full(len(cluster), cluster_id, dtype=np.int64)
@@ -334,6 +338,7 @@ def extract_watermark_elzein_mesh(
                 candidate_counts=one_to_one_candidates,
                 workers=one_to_one_workers,
                 verbose=verbose,
+                mode=correspondence_mode,
             )
             aligned_marked_vertices = np.full_like(original_vertices, np.nan)
             matched_vertex_mask = np.zeros(len(original_vertices), dtype=bool)
@@ -342,7 +347,7 @@ def extract_watermark_elzein_mesh(
         except (RuntimeError, ValueError) as exc:
             if verbose:
                 print(
-                    "[ElZein 1to1] matching failed; falling back to "
+                    f"[ElZein {correspondence_mode}] matching failed; falling back to "
                     f"coordinate many-to-one ({exc})"
                 )
             aligned_marked_vertices, matched_vertex_mask = (
@@ -355,14 +360,14 @@ def extract_watermark_elzein_mesh(
                 )
             )
     else:
-        if correspondence_mode == "1to1" and verbose:
+        if correspondence_mode in ONE_TO_ONE_MODES and verbose:
             print(
-                "[ElZein 1to1] vertex count changed: "
+                f"[ElZein {correspondence_mode}] vertex count changed: "
                 f"{len(original_vertices)} -> {len(marked_vertices)}; "
                 "correspondence=coordinate fallback"
             )
         effective_mode = (
-            "coordinate" if correspondence_mode == "1to1" else correspondence_mode
+            "coordinate" if correspondence_mode in ONE_TO_ONE_MODES else correspondence_mode
         )
         aligned_marked_vertices, matched_vertex_mask = (
             align_attacked_vertices_to_original(

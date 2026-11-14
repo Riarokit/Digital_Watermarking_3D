@@ -37,17 +37,17 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    # ("noise", [0.5, 1.0, 1.5]),
-    ("smoothing", [50]),
-    # ("cropping", [0.7, 0.5, 0.3]),
-    # ("reordering", [0.1, 0.5, 1.0]),
-    # ("downsampling", [0.8, 1.0, 1.2]),
+    ("noise", [0.8, 1.0, 1.2]),
+    ("smoothing", [10, 20, 30]),
+    ("cropping", [0.7, 0.5, 0.3]),
+    ("reordering", [0.1, 0.5, 1.0]),
+    ("downsampling", [0.8, 1.0, 1.2]),
     # ("visual_quality", [None]),
 ]
 
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.2
+SMOOTHING_LAMBDA = 0.1
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
@@ -56,7 +56,8 @@ DOWNSAMPLING_MODE = "voxel"
 GRAPH_MODE = "knn"
 KNN_K = 24
 GRAPH_RADIUS = 0.03
-PROPOSED_CORRESPONDENCE_MODE = "1to1"
+# auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
+PROPOSED_CORRESPONDENCE_MODE = "hk"
 PROPOSED_INDEX_DISTANCE_FACTOR = 30.0
 PROPOSED_COORDINATE_DISTANCE_FACTOR = 30.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
@@ -83,7 +84,7 @@ HU_CORRESPONDENCE_MODE = "coordinate"  # auto, index, or coordinate
 HU_COORDINATE_DISTANCE_FACTOR = 30.0
 
 # El Zein手法
-ELZEIN_CORRESPONDENCE_MODE = "1to1"  # auto, index, coordinate, or 1to1
+ELZEIN_CORRESPONDENCE_MODE = "hk"  # auto / index / coordinate / hk / auction / bidir
 ELZEIN_INDEX_DISTANCE_FACTOR = 30.0
 ELZEIN_COORDINATE_DISTANCE_FACTOR = 30.0
 ELZEIN_MAX_INDEX_INCONSISTENCY_RATIO = 0.01

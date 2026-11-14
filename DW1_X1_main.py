@@ -35,9 +35,10 @@ if __name__ == "__main__":
     index_distance_factor = 30.0           # 同一インデックス対応の許容距離倍率
     coordinate_distance_factor = 30.0     # 座標・曲面対応の許容距離倍率
     max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
-    correspondence_mode = "1to1"
+    # auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
+    correspondence_mode = "hk"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
-    one_to_one_workers = 8  # auto: serial for Bunny, up to 4 processes when large
+    one_to_one_workers = 8  # 0: auto (small=serial, large=up to 4 threads)
     # 平面曲面アプローチ
     flatness_weighting = 0
     # 点群可視化

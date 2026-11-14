@@ -4,18 +4,17 @@ import os
 import sys
 import time
 import hashlib
-from concurrent.futures import ProcessPoolExecutor
-from concurrent.futures.process import BrokenProcessPool
+from concurrent.futures import ThreadPoolExecutor
 from scipy.sparse import bmat, csr_matrix
 from scipy.sparse.csgraph import (
     connected_components,
-    maximum_bipartite_matching,
     min_weight_full_bipartite_matching,
 )
 from scipy.spatial import cKDTree
 from sklearn.cluster import KMeans
 import DW2_func as DW2F
 from sklearn.neighbors import NearestNeighbors, kneighbors_graph, radius_neighbors_graph
+from modules.assignment import hk_matching, auction_assignment, warmup_assignment
 try:
     import cupy as cp
 except ImportError as exc:
@@ -57,16 +56,12 @@ DUAL_BAND_HIGH_RANGE = (0.6, 1.0)
 DUAL_BAND_LOW_ENERGY_SHARE = 0.30
 ONE_TO_ONE_CANDIDATES = (8, 16, 32, 64, 128)
 ONE_TO_ONE_AUTO_WORKER_THRESHOLD = 100_000
+ONE_TO_ONE_MODES = ("hk", "auction", "bidir")
+CORRESPONDENCE_MODES = ("auto", "index", "coordinate") + ONE_TO_ONE_MODES
+BIDIRECTIONAL_CANDIDATES = (8, 16, 32)
 # Temporary investigation switch.  The summary is deliberately emitted to
 # stderr so DW2_exp's stdout suppression does not hide correspondence timing.
 ONE_TO_ONE_PROFILE_LOGS = True
-# On Dragon this avoids expensive failed min-cost solves.  Keep the switch
-# temporarily so its benefit can be profiled and removed after this study.
-ONE_TO_ONE_USE_FEASIBILITY_PREFILTER = True
-
-_ONE_TO_ONE_WORKER_TREE = None
-_ONE_TO_ONE_WORKER_ORIGINAL = None
-_ONE_TO_ONE_WORKER_CANDIDATES = None
 
 # =========================================================
 #  クラスタリング関数群
@@ -1036,9 +1031,13 @@ def _bipartite_component_capacity_ok(graph):
 
 
 def _solve_one_to_one_cluster(
-    tree, xyz_orig, cluster_id, rows, candidate_counts
+    tree, xyz_orig, cluster_id, rows, candidate_counts, mode="hk"
 ):
-    """Solve one local bijection without changing the candidate objective."""
+    """Solve a cluster using HK feasibility and exact or auction assignment."""
+    if mode == "bidir":
+        return _solve_bidirectional_cluster(
+            tree, xyz_orig, cluster_id, rows, max(candidate_counts)
+        )
     profile = {
         "query_seconds": 0.0,
         "graph_seconds": 0.0,
@@ -1046,6 +1045,7 @@ def _solve_one_to_one_cluster(
         "capacity_rejections": 0,
         "feasibility_seconds": 0.0,
         "min_cost_seconds": 0.0,
+        "auction_seconds": 0.0,
         "attempts": [],
     }
     # Reuse each KD query for its candidate prefixes.  This preserves the fixed
@@ -1082,23 +1082,33 @@ def _solve_one_to_one_cluster(
                 profile["capacity_rejections"] += 1
                 profile["attempts"].append((candidate_count, False, 0.0, 0.0))
                 continue
-            feasibility_seconds = 0.0
-            if ONE_TO_ONE_USE_FEASIBILITY_PREFILTER:
-                # This cannot alter the chosen solution: only the first
-                # feasible prefix is sent to the same min-weight solver as
-                # before.  It is a profiling option, not the default, because
-                # SciPy's maximum matching is slower on dense Dragon graphs.
-                started = time.perf_counter()
-                cardinality = np.count_nonzero(
-                    maximum_bipartite_matching(graph, perm_type="column") >= 0
+            started = time.perf_counter()
+            feasibility = hk_matching(graph.indptr, graph.indices, graph.shape[1])
+            feasibility_seconds = time.perf_counter() - started
+            profile["feasibility_seconds"] += feasibility_seconds
+            if np.any(feasibility < 0):
+                profile["attempts"].append(
+                    (candidate_count, False, feasibility_seconds, 0.0)
                 )
-                feasibility_seconds = time.perf_counter() - started
-                profile["feasibility_seconds"] += feasibility_seconds
-                if cardinality != len(rows):
-                    profile["attempts"].append(
-                        (candidate_count, False, feasibility_seconds, 0.0)
-                    )
-                    continue
+                continue
+            if mode == "auction":
+                started = time.perf_counter()
+                costs = np.ascontiguousarray(np.maximum(
+                    distances_all[:, :candidate_count] ** 2, 1e-15
+                ))
+                columns = np.ascontiguousarray(np.searchsorted(
+                    candidates, candidates_all[:, :candidate_count]
+                ), dtype=np.int64)
+                epsilon = max(float(np.median(costs[:, 0])) * .01, 1e-15)
+                local_columns, _ = auction_assignment(
+                    costs, columns, len(candidates), epsilon
+                )
+                auction_seconds = time.perf_counter() - started
+                profile["auction_seconds"] += auction_seconds
+                profile["attempts"].append(
+                    (candidate_count, True, feasibility_seconds, auction_seconds)
+                )
+                return rows, candidates[local_columns], candidate_count, profile
             try:
                 started = time.perf_counter()
                 local_rows, local_columns = min_weight_full_bipartite_matching(
@@ -1125,28 +1135,75 @@ def _solve_one_to_one_cluster(
             )
             return rows, assigned, candidate_count, profile
     raise RuntimeError(
-        "1to1 could not match original cluster "
+        f"{mode} could not match original cluster "
         f"{cluster_id} with candidates={candidate_counts}."
     )
 
 
-def _initialize_one_to_one_worker(xyz_att, xyz_orig, candidate_counts):
-    global _ONE_TO_ONE_WORKER_TREE
-    global _ONE_TO_ONE_WORKER_ORIGINAL
-    global _ONE_TO_ONE_WORKER_CANDIDATES
-    _ONE_TO_ONE_WORKER_TREE = cKDTree(xyz_att)
-    _ONE_TO_ONE_WORKER_ORIGINAL = xyz_orig
-    _ONE_TO_ONE_WORKER_CANDIDATES = candidate_counts
+def _solve_bidirectional_cluster(tree, xyz_orig, cluster_id, rows, pool_count):
+    """Sparse exact assignment on forward/reverse neighbour edges.
 
-
-def _solve_one_to_one_worker(task):
-    cluster_id, rows = task
-    return _solve_one_to_one_cluster(
-        _ONE_TO_ONE_WORKER_TREE,
-        _ONE_TO_ONE_WORKER_ORIGINAL,
-        cluster_id,
-        rows,
-        _ONE_TO_ONE_WORKER_CANDIDATES,
+    The column pool is the union of each row's ``pool_count`` nearest received
+    points. Try 8, 16, and 32 forward AND reverse neighbours within that pool.
+    Duplicate edges keep their cost once (sparse maximum, never a sum).
+    """
+    profile = {
+        "query_seconds": 0.0, "graph_seconds": 0.0,
+        "capacity_seconds": 0.0, "capacity_rejections": 0,
+        "feasibility_seconds": 0.0, "min_cost_seconds": 0.0,
+        "auction_seconds": 0.0, "attempts": [],
+    }
+    started = time.perf_counter()
+    points = xyz_orig[rows]
+    pool_count = min(pool_count, tree.n)
+    distances, indices = tree.query(points, k=pool_count)
+    distances = distances.reshape(len(rows), pool_count)
+    indices = indices.reshape(len(rows), pool_count)
+    pool = np.unique(indices)
+    if len(pool) < len(rows):
+        raise RuntimeError(f"bidir has too few received candidates for cluster {cluster_id}.")
+    reverse_count = min(max(BIDIRECTIONAL_CANDIDATES), len(rows))
+    reverse_distances, reverse_rows = cKDTree(points).query(
+        tree.data[pool], k=reverse_count
+    )
+    reverse_distances = reverse_distances.reshape(len(pool), reverse_count)
+    reverse_rows = reverse_rows.reshape(len(pool), reverse_count)
+    profile["query_seconds"] += time.perf_counter() - started
+    for count in BIDIRECTIONAL_CANDIDATES:
+        forward_count = min(count, pool_count)
+        backward_count = min(count, reverse_count)
+        started = time.perf_counter()
+        forward = csr_matrix(
+            (np.maximum(distances[:, :forward_count].ravel() ** 2, 1e-15),
+             (np.repeat(np.arange(len(rows)), forward_count),
+              np.searchsorted(pool, indices[:, :forward_count]).ravel())),
+            shape=(len(rows), len(pool)),
+        )
+        reverse = csr_matrix(
+            (np.maximum(reverse_distances[:, :backward_count].ravel() ** 2, 1e-15),
+             (reverse_rows[:, :backward_count].ravel(),
+              np.repeat(np.arange(len(pool)), backward_count))),
+            shape=forward.shape,
+        )
+        graph = forward.maximum(reverse)
+        profile["graph_seconds"] += time.perf_counter() - started
+        started = time.perf_counter()
+        try:
+            local_rows, local_columns = min_weight_full_bipartite_matching(graph)
+        except ValueError:
+            seconds = time.perf_counter() - started
+            profile["min_cost_seconds"] += seconds
+            profile["attempts"].append((count, False, 0.0, seconds))
+            continue
+        seconds = time.perf_counter() - started
+        profile["min_cost_seconds"] += seconds
+        assigned = np.empty(len(rows), dtype=np.int64)
+        assigned[local_rows] = pool[local_columns]
+        profile["attempts"].append((count, True, 0.0, seconds))
+        return rows, assigned, count, profile
+    raise RuntimeError(
+        f"bidir could not match original cluster {cluster_id} "
+        f"with pool={pool_count}, neighbours={BIDIRECTIONAL_CANDIDATES}."
     )
 
 
@@ -1161,6 +1218,7 @@ def _one_to_one_profile_summary(results):
         "capacity_rejections": 0,
         "feasibility_seconds": 0.0,
         "min_cost_seconds": 0.0,
+        "auction_seconds": 0.0,
     }
     for _, _, chosen_count, profile in results:
         selected[chosen_count] = selected.get(chosen_count, 0) + 1
@@ -1191,20 +1249,26 @@ def match_point_cloud_one_to_one(
     candidate_counts=ONE_TO_ONE_CANDIDATES,
     workers=0,
     verbose=True,
+    mode="hk",
 ):
     """Match original points to received points by a local geometry-only bijection.
 
-    Candidate prefixes 8, 16, 32, 64, and 128 are tried in order.  The first
-    prefix admitting a complete matching is minimized for total squared
-    distance.  Row order is never used.  The bijection is local: different GFT
-    clusters may reuse a received point, so this is not a global bijection.  The
-    two arrays may have different row counts; each cluster only requires enough
-    distinct received candidates for its original rows.
+    ``hk`` checks candidate prefixes with compiled Hopcroft-Karp, then uses
+    the original sparse exact minimum-cost solver on the first feasible prefix.
+    ``auction`` uses the same prefixes and HK check, then approximate auction.
+    ``bidir`` uses 8/16/32 forward and reverse edges from a column pool defined
+    by max(candidate_counts). No original/received row identity is used.
+
+    Uniqueness is local to each GFT cluster; different clusters can reuse a
+    received point. Arrays may have different row counts (El Zein carriers).
+    The alignment wrapper handles count reduction by coordinate fallback.
 
     ``workers=0`` uses serial execution below 100,000 points and up to four
-    processes above it.  A process failure falls back to the identical serial
-    solver and therefore does not alter the correspondence result.
+    threads above it. Explicit workers are capped by the number of clusters.
+    HK/auction JIT warmup happens before starting cluster threads.
     """
+    if mode not in ONE_TO_ONE_MODES:
+        raise ValueError(f"mode must be one of {ONE_TO_ONE_MODES}, got {mode!r}.")
     xyz_att = np.asarray(xyz_att, dtype=np.float64)
     xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
     labels = np.asarray(labels)
@@ -1214,17 +1278,19 @@ def match_point_cloud_one_to_one(
         or xyz_orig.ndim != 2
         or xyz_orig.shape[1] != 3
     ):
-        raise ValueError("1to1 correspondence requires (N, 3) point arrays.")
+        raise ValueError(f"{mode} correspondence requires (N, 3) point arrays.")
+    if not np.isfinite(xyz_att).all() or not np.isfinite(xyz_orig).all():
+        raise ValueError("Correspondence points must contain finite coordinates.")
     if labels.shape != (len(xyz_orig),):
         raise ValueError("labels must have one entry per original point.")
     if len(xyz_orig) == 0:
-        raise ValueError("1to1 correspondence requires original points.")
+        raise ValueError(f"{mode} correspondence requires original points.")
     if len(xyz_att) < 2:
         raise ValueError(
-            "1to1 correspondence requires at least two points."
+            f"{mode} correspondence requires at least two received points."
         )
-    if distance_factor <= 0:
-        raise ValueError("distance_factor must be positive.")
+    if not np.isfinite(distance_factor) or distance_factor <= 0:
+        raise ValueError("distance_factor must be finite and positive.")
     candidate_counts = tuple(int(value) for value in candidate_counts)
     if (
         not candidate_counts
@@ -1239,38 +1305,18 @@ def match_point_cloud_one_to_one(
         for cluster_id in np.unique(labels)
     ]
     worker_count = _one_to_one_worker_count(workers, len(xyz_orig), len(tasks))
+    warmup_assignment(mode)
     tree = cKDTree(xyz_att)
-    solver = _solve_one_to_one_cluster
+    def solve(task):
+        cluster_id, rows = task
+        return _solve_one_to_one_cluster(
+            tree, xyz_orig, cluster_id, rows, candidate_counts, mode
+        )
     if worker_count == 1:
-        results = [
-            solver(
-                tree, xyz_orig, cluster_id, rows, candidate_counts
-            )
-            for cluster_id, rows in tasks
-        ]
+        results = [solve(task) for task in tasks]
     else:
-        try:
-            with ProcessPoolExecutor(
-                max_workers=worker_count,
-                initializer=_initialize_one_to_one_worker,
-                initargs=(xyz_att, xyz_orig, candidate_counts),
-            ) as executor:
-                results = list(executor.map(
-                    _solve_one_to_one_worker, tasks, chunksize=1
-                ))
-        except (OSError, RuntimeError, BrokenProcessPool) as exc:
-            if verbose:
-                print(
-                    "[1to1] process parallelism unavailable; "
-                    f"using the identical serial solver ({exc})"
-                )
-            worker_count = 1
-            results = [
-                solver(
-                    tree, xyz_orig, cluster_id, rows, candidate_counts
-                )
-                for cluster_id, rows in tasks
-            ]
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            results = list(executor.map(solve, tasks))
 
     output = np.full(len(xyz_orig), -1, dtype=np.int64)
     maximum_candidates = 0
@@ -1292,7 +1338,7 @@ def match_point_cloud_one_to_one(
     if verbose:
         global_unique_ratio = len(np.unique(output)) / len(output)
         print(
-            f"[1to1] threshold={threshold:.6e}, "
+            f"[{mode}] threshold={threshold:.6e}, "
             f"unmatched={np.count_nonzero(~valid)} / {len(xyz_orig)}, "
             "within_cluster_unique=100.00%, "
             f"global_received_unique={global_unique_ratio:.2%}, "
@@ -1310,16 +1356,17 @@ def match_point_cloud_one_to_one(
             np.ascontiguousarray(output).view(np.uint8), digest_size=8
         ).hexdigest()
         print(
-            "[1to1 profile] "
+            f"[{mode} profile] "
             f"clusters={len(results)}, selected={{ {selected_text} }}, "
             f"infeasible={{ {rejected_text} }}, workers={worker_count}, "
-            f"prefilter={'on' if ONE_TO_ONE_USE_FEASIBILITY_PREFILTER else 'off'}, "
+            f"check={'HK' if mode != 'bidir' else 'min-cost'}, "
             f"query={timings['query_seconds']:.3f}s, "
             f"graph={timings['graph_seconds']:.3f}s, "
             f"capacity={timings['capacity_seconds']:.3f}s "
             f"(rejected={timings['capacity_rejections']}), "
             f"feasibility={timings['feasibility_seconds']:.3f}s, "
-            f"min_cost={timings['min_cost_seconds']:.3f}s",
+            f"min_cost={timings['min_cost_seconds']:.3f}s, "
+            f"auction={timings['auction_seconds']:.3f}s",
             f"assignment={assignment_fingerprint}",
             file=sys.stderr,
         )
@@ -1445,19 +1492,20 @@ def align_attacked_vertices_to_original(
     ``correspondence_mode="auto"`` retains index correspondence when the arrays
     have equal shape and the order-consistency test succeeds. ``"coordinate"``
     always uses coordinate-based nearest-neighbor matching, while ``"index"``
-    requires equal array shapes. ``"1to1"`` ignores row order and enforces a
-    bijection inside each original GFT cluster. The returned mask
+    requires equal array shapes. ``"hk"``, ``"auction"`` and ``"bidir"`` use
+    geometry-only one-to-one assignment inside each original GFT cluster. The returned mask
     identifies original vertices with a match inside the distance threshold.
     """
-    if correspondence_mode not in {"auto", "index", "coordinate", "1to1"}:
+    if correspondence_mode not in CORRESPONDENCE_MODES:
         raise ValueError(
-            "correspondence_mode must be 'auto', 'index', 'coordinate', or '1to1'."
+            f"correspondence_mode must be one of {CORRESPONDENCE_MODES}, "
+            f"got {correspondence_mode!r}."
         )
     attacked_vertices = np.asarray(attacked_vertices, dtype=float)
     original_vertices = np.asarray(original_vertices, dtype=float)
-    if correspondence_mode == "1to1":
+    if correspondence_mode in ONE_TO_ONE_MODES:
         if labels is None:
-            raise ValueError("1to1 correspondence requires original labels.")
+            raise ValueError(f"{correspondence_mode} correspondence requires original labels.")
         if len(attacked_vertices) == len(original_vertices):
             try:
                 aligned, matched_mask, _, _ = match_point_cloud_one_to_one(
@@ -1468,17 +1516,18 @@ def align_attacked_vertices_to_original(
                     candidate_counts=one_to_one_candidates,
                     workers=one_to_one_workers,
                     verbose=verbose,
+                    mode=correspondence_mode,
                 )
                 return aligned, matched_mask
             except (RuntimeError, ValueError) as exc:
                 if verbose:
                     print(
-                        "[1to1] matching failed; falling back to "
+                        f"[{correspondence_mode}] matching failed; falling back to "
                         f"coordinate many-to-one ({exc})"
                     )
         elif verbose:
             print(
-                "[1to1] vertex count changed: "
+                f"[{correspondence_mode}] vertex count changed: "
                 f"{len(original_vertices)} -> "
                 f"{len(attacked_vertices)}; correspondence=coordinate fallback"
             )
@@ -1656,7 +1705,7 @@ def extract_watermark_x1_dualband(
     index_distance_factor=20.0,
     coordinate_distance_factor=2.0,
     max_index_inconsistency_ratio=0.01,
-    correspondence_mode="1to1",
+    correspondence_mode="hk",
     one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
     low_band=DUAL_BAND_LOW_RANGE,
     high_band=DUAL_BAND_HIGH_RANGE,
