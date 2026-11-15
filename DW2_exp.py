@@ -3,6 +3,10 @@
 import contextlib
 import io
 import os
+import sys
+import traceback
+from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import open3d as o3d
@@ -793,5 +797,44 @@ def main():
             )
 
 
+class _TeeStream:
+    """画面とログへ同じ出力を書き込み、途中経過も即時保存する。"""
+
+    def __init__(self, console, log):
+        self.console = console
+        self.log = log
+
+    def write(self, text):
+        self.console.write(text)
+        self.log.write(text)
+        self.log.flush()
+        return len(text)
+
+    def flush(self):
+        self.console.flush()
+        self.log.flush()
+
+
+def run_with_logging():
+    log_dir = Path(__file__).resolve().parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    log_path = log_dir / f"DW2_exp_{timestamp}.log"
+    with log_path.open("x", encoding="utf-8") as log:
+        with contextlib.redirect_stdout(_TeeStream(sys.stdout, log)), \
+                contextlib.redirect_stderr(_TeeStream(sys.stderr, log)):
+            print(f"Log: {log_path}")
+            print(f"Started: {datetime.now().isoformat(timespec='seconds')}")
+            print(f"Input: {INPUT_FILE}")
+            print(f"Experiments: {EXPERIMENTS}")
+            try:
+                main()
+            except BaseException:
+                traceback.print_exc()
+                raise
+            finally:
+                print(f"Ended: {datetime.now().isoformat(timespec='seconds')}")
+
+
 if __name__ == "__main__":
-    main()
+    run_with_logging()
