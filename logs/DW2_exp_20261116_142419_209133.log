@@ -1,0 +1,173 @@
+Log: C:\dev\Digital_Watermarking_3D\logs\DW2_exp_20261116_142419_209133.log
+Started: 2026-11-16T14:24:19
+Input: C:/bun_zipper.ply
+Experiments: [('noise', [0.8, 1.0, 1.2]), ('smoothing', [10, 30, 50]), ('cropping', [0.7, 0.5, 0.3]), ('reordering', [0.1, 0.5, 1.0]), ('downsampling', [1.0, 1.5, 2.0])]
+[Normalize] Before: [-0.0947  0.033  -0.0619] ~ [0.061  0.1873 0.0588]
+[Normalize]  After: [-0.5819 -0.5296 -0.6062] ~ [0.7499 0.7905 0.426 ]
+Mesh: 34834 vertices, 69451 faces; watermark=64 bits; target PSNR=60.0 dB
+
+========== Embedding trial 1 / 5 (seed=42) ==========
+
+[ElZein] redundant Portion 2 embedding...
+[ElZein] strength=2.597205e-03, PSNR=60.00 dB
+
+[Hu] surface EMD embedding...
+[Hu] FideP=53.389580, alpha=5.801080e+00, PSNR=60.00 dB
+
+[Proposed] KMeans: approximately 500 points/cluster...
+[KMeans] 検出されたクラスタ数: 69
+[KMeans] 最も点数が少ないクラスタの点数: 377
+[Proposed] 各クラスタを一度だけ固有値分解し、全周波数帯の変位を一括計算します...
+[GFT] 基底計算バックエンド: CPU (CuPyがインストールされていません)
+[P-All(500)] strength=1.607242e-03, PSNR=60.00 dB
+[P-Low(500)] strength=3.601874e-03, PSNR=60.00 dB
+[P-High(500)] strength=3.586139e-03, PSNR=60.00 dB
+
+Embedding quality (seed=42, before attacks):
+  ElZein               PSNR=60.00 dB
+  Hu                   PSNR=60.00 dB
+  P-All(500)           PSNR=60.00 dB
+  P-Low(500)           PSNR=60.00 dB
+  P-High(500)          PSNR=60.00 dB
+
+========== Embedding trial 2 / 5 (seed=43) ==========
+
+[ElZein] redundant Portion 2 embedding...
+[ElZein] strength=2.601496e-03, PSNR=60.00 dB
+
+[Proposed] KMeans: approximately 500 points/cluster...
+[KMeans] 検出されたクラスタ数: 69
+[KMeans] 最も点数が少ないクラスタの点数: 401
+[Proposed] 各クラスタを一度だけ固有値分解し、全周波数帯の変位を一括計算します...
+[P-All(500)] strength=1.607242e-03, PSNR=60.00 dB
+[P-Low(500)] strength=3.600577e-03, PSNR=60.00 dB
+[P-High(500)] strength=3.586908e-03, PSNR=60.00 dB
+
+Embedding quality (seed=43, before attacks):
+  ElZein               PSNR=60.00 dB
+  P-All(500)           PSNR=60.00 dB
+  P-Low(500)           PSNR=60.00 dB
+  P-High(500)          PSNR=60.00 dB
+
+========== Embedding trial 3 / 5 (seed=44) ==========
+
+[ElZein] redundant Portion 2 embedding...
+[ElZein] strength=2.584294e-03, PSNR=60.00 dB
+
+[Proposed] KMeans: approximately 500 points/cluster...
+[KMeans] 検出されたクラスタ数: 69
+[KMeans] 最も点数が少ないクラスタの点数: 386
+[Proposed] 各クラスタを一度だけ固有値分解し、全周波数帯の変位を一括計算します...
+[P-All(500)] strength=1.607242e-03, PSNR=60.00 dB
+[P-Low(500)] strength=3.601095e-03, PSNR=60.00 dB
+[P-High(500)] strength=3.585883e-03, PSNR=60.00 dB
+
+Embedding quality (seed=44, before attacks):
+  ElZein               PSNR=60.00 dB
+  P-All(500)           PSNR=60.00 dB
+  P-Low(500)           PSNR=60.00 dB
+  P-High(500)          PSNR=60.00 dB
+
+========== Embedding trial 4 / 5 (seed=45) ==========
+
+[ElZein] redundant Portion 2 embedding...
+[ElZein] strength=2.571095e-03, PSNR=60.00 dB
+
+[Proposed] KMeans: approximately 500 points/cluster...
+[KMeans] 検出されたクラスタ数: 69
+[KMeans] 最も点数が少ないクラスタの点数: 361
+[Proposed] 各クラスタを一度だけ固有値分解し、全周波数帯の変位を一括計算します...
+[P-All(500)] strength=1.607242e-03, PSNR=60.00 dB
+[P-Low(500)] strength=3.601355e-03, PSNR=60.00 dB
+[P-High(500)] strength=3.585627e-03, PSNR=60.00 dB
+
+Embedding quality (seed=45, before attacks):
+  ElZein               PSNR=60.00 dB
+  P-All(500)           PSNR=60.00 dB
+  P-Low(500)           PSNR=60.00 dB
+  P-High(500)          PSNR=60.00 dB
+
+========== Embedding trial 5 / 5 (seed=46) ==========
+
+[ElZein] redundant Portion 2 embedding...
+[ElZein] strength=2.577186e-03, PSNR=60.00 dB
+
+[Proposed] KMeans: approximately 500 points/cluster...
+[KMeans] 検出されたクラスタ数: 69
+[KMeans] 最も点数が少ないクラスタの点数: 321
+[Proposed] 各クラスタを一度だけ固有値分解し、全周波数帯の変位を一括計算します...
+[P-All(500)] strength=1.607242e-03, PSNR=60.00 dB
+[P-Low(500)] strength=3.600577e-03, PSNR=60.00 dB
+[P-High(500)] strength=3.586908e-03, PSNR=60.00 dB
+
+Embedding quality (seed=46, before attacks):
+  ElZein               PSNR=60.00 dB
+  P-All(500)           PSNR=60.00 dB
+  P-Low(500)           PSNR=60.00 dB
+  P-High(500)          PSNR=60.00 dB
+  noise=0.8: 5 attack trial(s)
+  noise=1.0: 5 attack trial(s)
+  noise=1.2: 5 attack trial(s)
+
+Robustness: noise, BER, attack trials=5
+Embedding variants: ElZein=5, Hu=1, P-All(500)=5, P-Low(500)=5, P-High(500)=5
+Method               |          0.8 |          1.0 |          1.2
+-----------------------------------------------------------------
+ElZein               |       0.0034 |       0.0522 |       0.1750
+Hu                   |       0.0156 |       0.0375 |       0.0469
+P-All(500)           |       0.0000 |       0.0275 |       0.1197
+P-Low(500)           |       0.0000 |       0.0053 |       0.0187
+P-High(500)          |       0.0063 |       0.0806 |       0.2250
+  smoothing=10: 1 attack trial(s)
+  smoothing=30: 1 attack trial(s)
+  smoothing=50: 1 attack trial(s)
+
+Robustness: smoothing, BER, attack trials=1, lambda=0.1
+Embedding variants: ElZein=5, Hu=1, P-All(500)=5, P-Low(500)=5, P-High(500)=5
+Method               |           10 |           30 |           50
+-----------------------------------------------------------------
+ElZein               |       0.0000 |       0.1594 |       0.2453
+Hu                   |       0.0000 |       0.2656 |       0.2734
+P-All(500)           |       0.0000 |       0.0000 |       0.2031
+P-Low(500)           |       0.0000 |       0.0000 |       0.0219
+P-High(500)          |       0.0000 |       0.0016 |       0.2969
+  cropping=0.7: 1 attack trial(s)
+  cropping=0.5: 1 attack trial(s)
+  cropping=0.3: 1 attack trial(s)
+
+Robustness: cropping, BER, attack trials=1
+Embedding variants: ElZein=5, Hu=1, P-All(500)=5, P-Low(500)=5, P-High(500)=5
+Method               |          0.7 |          0.5 |          0.3
+-----------------------------------------------------------------
+ElZein               |       0.0000 |       0.0000 |       0.0000
+Hu                   |       0.0000 |       0.0000 |       0.1328
+P-All(500)           |       0.0000 |       0.0000 |       0.0000
+P-Low(500)           |       0.0000 |       0.0000 |       0.0000
+P-High(500)          |       0.0000 |       0.0000 |       0.0000
+  reordering=0.1: 5 attack trial(s)
+  reordering=0.5: 5 attack trial(s)
+  reordering=1.0: 5 attack trial(s)
+
+Robustness: reordering, BER, attack trials=5
+Embedding variants: ElZein=5, Hu=1, P-All(500)=5, P-Low(500)=5, P-High(500)=5
+Method               |          0.1 |          0.5 |          1.0
+-----------------------------------------------------------------
+ElZein               |       0.0000 |       0.0000 |       0.0000
+Hu                   |       0.0000 |       0.0000 |       0.0000
+P-All(500)           |       0.0000 |       0.0000 |       0.0000
+P-Low(500)           |       0.0000 |       0.0000 |       0.0000
+P-High(500)          |       0.0000 |       0.0000 |       0.0000
+  downsampling=1.0: 1 attack trial(s)
+  downsampling=1.5: 1 attack trial(s)
+  downsampling=2.0: 1 attack trial(s)
+
+Robustness: downsampling, BER, attack trials=1
+Embedding variants: ElZein=5, Hu=1, P-All(500)=5, P-Low(500)=5, P-High(500)=5
+Method               |          1.0 |          1.5 |          2.0
+-----------------------------------------------------------------
+ElZein               |       0.0000 |       0.0172 |       0.1812
+Hu                   |       0.0703 |       0.1953 |       0.2266
+P-All(500)           |       0.0000 |       0.0547 |       0.3375
+P-Low(500)           |       0.0000 |       0.0031 |       0.0391
+P-High(500)          |       0.0000 |       0.1094 |       0.3547
+Ended: 2026-11-16T15:18:23
