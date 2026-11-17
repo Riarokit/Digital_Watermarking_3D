@@ -249,7 +249,7 @@ def visualize_triangle_mesh(
 
 def visualize_embedded_points(xyz_orig, xyz_after, threshold=1e-8):
     """
-    点群のうち情報が埋め込まれている点（座標が変化した点）を黄色で、
+    点群のうち情報が埋め込まれている点（座標が変化した点）を赤で、
     埋め込まれていない点（座標が変化していない点）を灰色で表して可視化する関数。
     
     Parameters:
@@ -266,14 +266,14 @@ def visualize_embedded_points(xyz_orig, xyz_after, threshold=1e-8):
     # 色配列を準備 (初期値は灰色: [0.6, 0.6, 0.6])
     colors = np.ones((len(xyz_after), 3)) * 0.6
     
-    # 変化量が閾値以上の点を黄色: [1.0, 1.0, 0.0] に設定
+    # 変化量が閾値以上の点を赤: [1.0, 0.0, 0.0] に設定
     embedded_indices = diffs > threshold
-    colors[embedded_indices] = [1.0, 1.0, 0.0]
+    colors[embedded_indices] = [1.0, 0.0, 0.0]
     
     pcd.colors = o3d.utility.Vector3dVector(colors)
     
     print(f"[Visualize] 総点数: {len(xyz_after)}, 埋め込み(変更)された点数: {np.sum(embedded_indices)}")
-    o3d.visualization.draw_geometries([pcd], window_name="Embedded Points (Yellow) vs Non-embedded (Gray)")
+    o3d.visualization.draw_geometries([pcd], window_name="Embedded Points (Red) vs Non-embedded (Gray)")
     return pcd
 
 def evaluate_psnr(pcd_before, pcd_after, reverse=True, by_index=False, verbose=True):
