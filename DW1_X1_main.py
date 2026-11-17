@@ -36,6 +36,7 @@ if __name__ == "__main__":
           "reordering"（並べ替え率 0–1）。attack_seed は乱数シード。
     """
     # === 埋込設定 ===
+    image_path = "watermark8.bmp"
     n = 8
     cluster_point = 500
     graph_mode = 'knn'
@@ -82,7 +83,6 @@ if __name__ == "__main__":
     # beta = 4.16e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
 
     # 1. データ取得
-    image_path = "watermark8.bmp"  # 埋め込みたい画像ファイル
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
         raise ValueError("Proposed method robustness tests require a triangle mesh.")
