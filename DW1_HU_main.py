@@ -36,7 +36,7 @@ if __name__ == "__main__":
     # === 可視化設定 ===
     show = True
     # === 攻撃設定 ===
-    attack_type = "downsampling"
+    attack_type = "none"
     attack_parameter = 1.0
     attack_seed = 42
     noise_mode = "gaussian"
@@ -46,13 +46,15 @@ if __name__ == "__main__":
     downsampling_mode = "voxel"
 
     # === Hu 固有の埋込設定 ===
-    fide_p = 52.5
-    T_rep = 25
+    fide_p = 52.7
+    # Positive integer: fixed repetitions per bit. "auto": use the maximum
+    # number of complete copies permitted by the scarcer signed-extrema set.
+    T_rep = "auto"
     
     # ======================
     # 1. データ取得
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
@@ -153,7 +155,9 @@ if __name__ == "__main__":
     
     # 8. 固有評価
     print(f"[Hu] 埋込強度 alpha: {alpha:.6e}")
+    requested_t = f"{T_rep} -> " if T_rep == "auto" else ""
     print(f"[Hu] 埋込位置数: {len(key_info.embedding_indices)} "
-          f"({T_rep} repetitions x {len(watermark_bits)} bits)")
+          f"({requested_t}{key_info.circular_count} repetitions x "
+          f"{len(watermark_bits)} bits)")
     print(f"埋込時間: {embed_time:.2f}秒")
     print(f"抽出時間: {extract_time:.2f}秒\n")

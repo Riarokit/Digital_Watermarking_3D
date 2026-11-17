@@ -82,7 +82,7 @@ DUAL_BAND_LOW_ENERGY_SHARE = 0.30
 
 # Hu手法
 HU_INITIAL_FIDEP = 53.0
-HU_T = 25
+HU_T = "auto"   # "auto" or a positive integer
 HU_ARNOLD_ITERATIONS = 20
 HU_CORRESPONDENCE_MODE = "coordinate"  # auto, index, or coordinate
 HU_COORDINATE_DISTANCE_FACTOR = 30.0
@@ -234,9 +234,10 @@ def match_hu_fidep(vertices, triangles, bits, target_mse):
         marked, key, alpha = embed(fidep)
         mse, psnr = embedding_quality(vertices, marked)
 
+    requested_t = f"{HU_T} -> " if HU_T == "auto" else ""
     print(
-        f"[Hu] FideP={fidep:.6f}, alpha={alpha:.6e}, "
-        f"PSNR={psnr:.2f} dB"
+        f"[Hu] T={requested_t}{key.circular_count}, FideP={fidep:.6f}, "
+        f"alpha={alpha:.6e}, PSNR={psnr:.2f} dB"
     )
     return marked, key, alpha
 
@@ -387,6 +388,7 @@ def prepare_methods(
             methods["Hu"] = {
                 "vertices": hu_marked,
                 "triangles": triangles,
+                "circular_count": hu_key.circular_count,
                 "extract": lambda attacked, attacked_triangles: (
                     DW1HU.extract_watermark_hu_mesh(
                         attacked,
@@ -681,7 +683,17 @@ def result_method_label(name, method_variants):
     """固定強度方式の結果ラベルに実測PSNRを付ける。"""
     if name == "Verma":
         return f"{name} ({method_variants[name][0]['psnr']:.2f} dB)"
+    if name == "Hu":
+        return f"Hu (T={method_variants[name][0]['circular_count']})"
     return name
+
+
+def embedding_variant_label(name, method_variants):
+    """Describe a method's embedding variants, including resolved Hu T."""
+    label = f"{name}={len(method_variants[name])}"
+    if name == "Hu":
+        label += f" (T={method_variants[name][0]['circular_count']})"
+    return label
 
 
 def print_robustness_table(
@@ -701,7 +713,7 @@ def print_robustness_table(
     print(
         "Embedding variants: "
         + ", ".join(
-            f"{name}={len(method_variants[name])}" for name in names
+            embedding_variant_label(name, method_variants) for name in names
         )
     )
     header = [f"{'Method':<{method_width}}"]

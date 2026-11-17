@@ -375,6 +375,39 @@ def _make_embedding_schedule(max_idx, min_idx, signal, repetitions):
             np.asarray(reps, dtype=np.int64))
 
 
+def _resolve_circular_embedding_count(max_idx, min_idx, signal, repetitions):
+    """Resolve a fixed T or the maximum number of complete watermark copies.
+
+    ``repetitions="auto"`` consumes as many *complete* watermark copies as
+    the scarcer signed-extrema set permits.  Each carrier remains unique; any
+    surplus extrema of the other sign are deliberately not reused.
+    """
+    if isinstance(repetitions, str):
+        if repetitions != "auto":
+            raise ValueError("T must be a positive integer or 'auto'.")
+        one_count = int(np.count_nonzero(signal == 1))
+        zero_count = int(np.count_nonzero(signal == 0))
+        limits = []
+        if one_count:
+            limits.append(len(max_idx) // one_count)
+        if zero_count:
+            limits.append(len(min_idx) // zero_count)
+        resolved = min(limits, default=0)
+        if resolved < 1:
+            raise ValueError(
+                "Stable extrema are insufficient for even one complete "
+                "watermark copy in T='auto' mode."
+            )
+        return int(resolved)
+    if isinstance(repetitions, (bool, np.bool_)) or not isinstance(
+        repetitions, (int, np.integer)
+    ):
+        raise ValueError("T must be a positive integer or 'auto'.")
+    if repetitions < 1:
+        raise ValueError("T must be at least 1.")
+    return int(repetitions)
+
+
 def _nearest_neighbor_scale(points):
     """欠損した極値キャリアを除外するための代表点間隔を返す。"""
     points = np.asarray(points, dtype=float)
@@ -391,8 +424,6 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
                             epsilon=1e-4):
     """論文 Algorithm 1 および式 (2)--(11) に基づき透かしを埋め込む。"""
     vertices, triangles = _validate_mesh(vertices, triangles)
-    if T < 1:
-        raise ValueError("T must be at least 1.")
     centered = vertices - np.mean(vertices, axis=0)
     rho = np.linalg.norm(centered, axis=1)
     rho_max = float(np.max(rho))
@@ -405,7 +436,12 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
         triangles, imf1, t=extreme_parameter, epsilon=epsilon
     )
     watermark_signal = watermark_to_hilbert_signal(watermark_bits, watermark_size, arnold_iterations)
-    embedding_indices, bit_indices, reps = _make_embedding_schedule(max_idx, min_idx, watermark_signal, T)
+    resolved_T = _resolve_circular_embedding_count(
+        max_idx, min_idx, watermark_signal, T
+    )
+    embedding_indices, bit_indices, reps = _make_embedding_schedule(
+        max_idx, min_idx, watermark_signal, resolved_T
+    )
 
     # 論文式 (9)。実際に埋込む L 個の極値に対して評価する。
     sum_sq = float(np.sum(imf1[embedding_indices] ** 2))
@@ -436,7 +472,7 @@ def embed_watermark_hu_mesh(vertices, triangles, watermark_bits, FideP=115.0, T=
         bit_indices=bit_indices,
         repetitions=reps,
         watermark_size=watermark_size,
-        circular_count=T,
+        circular_count=resolved_T,
         arnold_iterations=arnold_iterations,
         extreme_parameter=extreme_parameter,
         epsilon=epsilon,
