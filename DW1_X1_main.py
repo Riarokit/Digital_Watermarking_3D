@@ -10,44 +10,51 @@ if __name__ == "__main__":
     点群をクラスタリングし、各クラスタの疑似平面からの高さを信号値としてGFTを行う。
     各クラスタのGFT係数にビット列を埋め込み、各クラスタから復元した複数の同ビットを最後に一度のみ多数決して決定。
 
-    使用変数説明:
-    n                        = 画像サイズn×n
-    beta                     = 埋め込み強度の調整係数
-    cluster_point            = 1クラスタあたりの点数目安
-    graph_mode               = グラフ構築モード: 'knn' or 'radius' or 'hybrid'
-    k                        = k-NNグラフのk値
-    radius                   = 半径グラフの半径値
-    flatness_weighting       = 0:なし, 1:平面部重み, 2:曲面部重み
-    min_spectre, max_spectre = 最小・最大周波数帯域
+    パラメータ詳細:
+      beta / cluster_point
+          埋込強度 / GFT を行う1クラスタの目標頂点数。
+      graph_mode
+          "knn", "radius", "hybrid"。k は knn の近傍数、radius は radius/hybrid の半径。
+      flatness_weighting
+          0=なし、1=平面部重視、2=曲面部重視。
+      min_spectre / max_spectre
+          埋込対象にする GFT スペクトル帯域の下限・上限。
 
-    オプション設定:
-    OP: 切り取りやノイズ付加などのオプション手順
+      correspondence_mode
+          "auto", "index", "coordinate", "hk" (HK+厳密割当),
+          "auction" (HK+auction割当), "bidir" (双方向候補+厳密割当)。
+      index_distance_factor / max_index_inconsistency_ratio
+          index/auto 用の距離しきい値倍率 / 許容するインデックス不整合率。
+      coordinate_distance_factor
+          coordinate/hk/auction/bidir 用の距離しきい値倍率。
+      one_to_one_candidates / one_to_one_workers
+          hk/auction の候補数列 / 0=自動（大規模時は最大8）、正数=ワーカ数。
+
+      attack_type / attack_parameter
+          "none"（未使用）、"noise"（率%）、"smoothing"（反復回数）、
+          "cropping"（保持率 0–1）、"downsampling"（voxelサイズ%）、
+          "reordering"（並べ替え率 0–1）。attack_seed は乱数シード。
     """
-    # 画像サイズn×n
-    n = 16
-    # 1クラスタあたりの点数目安(k-means用)
-    cluster_point = 2000
-    # グラフ構築モード
+    # === 埋込設定 ===
+    n = 8
+    cluster_point = 500
     graph_mode = 'knn'
     k = 24
     radius = 0.03
-    # 点群対応付け設定
-    index_distance_factor = 30.0           # 同一インデックス対応の許容距離倍率
-    coordinate_distance_factor = 30.0     # 座標・曲面対応の許容距離倍率
-    max_index_inconsistency_ratio = 0.01  # インデックス対応で許容する不整合率
-    # auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
+    flatness_weighting = 0
+    # === 対応付け設定 ===
+    index_distance_factor = 30.0
+    coordinate_distance_factor = 30.0
+    max_index_inconsistency_ratio = 0.01
     correspondence_mode = "bidir"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
-    one_to_one_workers = 0  # 0: auto (small=serial, large=up to 8 threads)
-    # 平面曲面アプローチ
-    flatness_weighting = 0
-    # 点群可視化
+    one_to_one_workers = 0
+    # === 可視化設定 ===
     show = True
-    # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")
-    attack_type = "downsampling"
+    # === 攻撃設定 ===
+    attack_type = "none"
     attack_parameter = 1.0
     attack_seed = 42
-    # 攻撃詳細モード
     noise_mode = "gaussian"
     smoothing_lambda = 0.1
     cropping_mode = "axis"
@@ -55,6 +62,7 @@ if __name__ == "__main__":
     downsampling_mode = "voxel"
 
     # Bunny全周波用
+    # === メッシュ別埋込プリセット ===
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
     # beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
@@ -74,7 +82,7 @@ if __name__ == "__main__":
     # beta = 4.16e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
 
     # 1. データ取得
-    image_path = "watermark16.bmp"  # 埋め込みたい画像ファイル
+    image_path = "watermark8.bmp"  # 埋め込みたい画像ファイル
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:
         raise ValueError("Proposed method robustness tests require a triangle mesh.")
@@ -120,6 +128,9 @@ if __name__ == "__main__":
     max_embed_shift = np.max(diffs)
     print(f"[Debug] 最大埋め込み誤差: {max_embed_shift}")
 
+    # Keep the pre-attack result: yellow visualization must show watermark
+    # embedding changes, not changes introduced by the subsequent attack.
+    xyz_embedded = xyz_after.copy()
     triangles_after = triangles.copy()
     xyz_after, triangles_after = DW2F.apply_mesh_attack(
         xyz_after,
@@ -163,6 +174,7 @@ if __name__ == "__main__":
         if not show:
             DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
     if show:
+        DW2F.visualize_embedded_points(xyz, xyz_embedded)
         DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
         o3d.visualization.draw_geometries([pcd_after])
 

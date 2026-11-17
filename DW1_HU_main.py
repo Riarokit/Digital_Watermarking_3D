@@ -8,36 +8,49 @@ if __name__ == "__main__":
     """
     main関数概要:
     Huらが提案した表面上のEMDに基づく高精度電子透かし手法の実行プログラム。
-    1. 点群をメッシュ化し、表面上でEMDを実行。
-    2. 第一IMFの安定した極値点（山と谷）を特定。
-    3. 目標PSNR(FideP)に基づき強度alphaを最適化し、円状にT回繰り返し埋め込む。
-    4. 抽出時は多数決投票(Voting)により堅牢にビットを復元する。
+    点群をメッシュ化して表面 EMD を実行し、第一 IMF の安定極値に透かしを
+    T_rep 回繰り返し埋め込む。抽出時は多数決投票でビットを復元する。
+
+    パラメータ詳細:
+      fide_p / T_rep
+          Hu 法の目標 FideP と各ビットの円状埋込回数。fide_p を小さくすると
+          埋込強度 alpha は大きくなる。
+      correspondence_mode
+          "auto", "index", "coordinate"。coordinate は保存した埋込極値と
+          攻撃後に再検出した極値を座標距離で対応付ける。
+      hu_coordinate_distance_factor
+          coordinate 対応付けに用いる距離しきい値の倍率。
+
+      attack_type / attack_parameter
+          "none"（未使用）、"noise"（率%）、"smoothing"（反復回数）、
+          "cropping"（保持率 0–1）、"downsampling"（voxelサイズ%）、
+          "reordering"（並べ替え率 0–1）。attack_seed は乱数シード。
     """
     
-    # === パラメータ設定 ===
-    # 埋め込みに用いる画像サイズ n×n (論文では32x32 [Source 9: Sect 5])
+    # === 埋込設定 ===
+    image_path = "watermark16.bmp"
     n = 16
-    # フィデリティパラメータ (論文推奨: 115 [Source 9: Sect 5.1.2])
-    fide_p = 52.5
-    # 円状埋め込み回数 (論文推奨: 25 [Source 9: Sect 5.1.3])
-    T_rep = 25
-    correspondence_mode = "coordinate"  # "auto", "index", or "coordinate"
-    hu_coordinate_distance_factor = 5.0
+    # === 対応付け設定 ===
+    correspondence_mode = "coordinate"
+    hu_coordinate_distance_factor = 30.0
+    # === 可視化設定 ===
     show = True
-    # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")
+    # === 攻撃設定 ===
     attack_type = "downsampling"
     attack_parameter = 1.0
     attack_seed = 42
-    # 攻撃詳細モード
     noise_mode = "gaussian"
     smoothing_lambda = 0.1
     cropping_mode = "axis"
     cropping_axis = 0
     downsampling_mode = "voxel"
+
+    # === Hu 固有の埋込設定 ===
+    fide_p = 52.5
+    T_rep = 25
     
     # ======================
     # 1. データ取得
-    image_path = "watermark16.bmp"
     # input_file = "C:/bun_zipper.ply"
     input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
@@ -80,6 +93,9 @@ if __name__ == "__main__":
         print(f"[Error] 埋め込み失敗: {e}")
         exit()
     embed_time = time.time() - start_embed
+    # Keep the pre-attack result: yellow visualization must show watermark
+    # embedding changes, not changes introduced by the subsequent attack.
+    xyz_embedded = xyz_after.copy()
     triangles_after = triangles.copy()
 
     xyz_after, triangles_after = DW2F.apply_mesh_attack(
@@ -121,7 +137,7 @@ if __name__ == "__main__":
         if not show:
             DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
     if show:
-        # DW2F.visualize_embedded_points(xyz, xyz_after)
+        DW2F.visualize_embedded_points(xyz, xyz_embedded)
         DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
         o3d.visualization.draw_geometries([pcd_after])
 

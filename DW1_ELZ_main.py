@@ -9,30 +9,47 @@ import DW2_func as DW2F
 
 
 if __name__ == "__main__":
-    """El Zein Portion 2ベースの冗長埋め込み方式を実行・評価する。"""
+    """El Zein Portion 2ベースの冗長埋め込み方式を実行・評価する。
 
-    # === パラメータ設定 ===
+    パラメータ詳細:
+      correspondence_mode
+          "auto", "index", "coordinate", "hk" (HK+厳密割当),
+          "auction" (HK+auction割当), "bidir" (双方向候補+厳密割当)。
+      one_to_one_candidates / one_to_one_workers
+          hk/auction の候補数列 / 0=自動（大規模時は最大8）、正数=ワーカ数。
+
+      attack_type / attack_parameter
+          "none"（未使用）、"noise"（率%）、"smoothing"（反復回数）、
+          "cropping"（保持率 0–1）、"downsampling"（voxelサイズ%）、
+          "reordering"（並べ替え率 0–1）。attack_seed は乱数シード。
+    """
+
+    # === 埋込設定 ===
+    image_path = "watermark16.bmp"
     n = 16
-    # a = 2.53e-3  # Bunny用
-    a = 4.49e-3  # Dragon用
-    # a = 3.21e-3  # Armadillo用
-    show = True
-    correspondence_mode = "hk"  # auto / index / coordinate / hk / auction / bidir
+    # === 対応付け設定 ===
+    correspondence_mode = "hk"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
     one_to_one_workers = 0
-    # 攻撃パラメータ ("none", "noise", "smoothing", "cropping", "downsampling", "reordering")
+    # === 攻撃設定 ===
     attack_type = "smoothing"
     attack_parameter = 50
     attack_seed = 42
-    # 攻撃詳細モード
     noise_mode = "gaussian"
-    smoothing_lambda = 0.2
+    smoothing_lambda = 0.1
     cropping_mode = "axis"
     cropping_axis = 0
     downsampling_mode = "voxel"
 
+    # === 可視化設定 ===
+    show = True
+
+    # === メッシュ別埋込プリセット ===
+    # a = 2.53e-3  # Bunny用
+    a = 4.49e-3  # Dragon用
+    # a = 3.21e-3  # Armadillo用
+
     # 1. データ取得
-    image_path = "watermark16.bmp"
     # input_file = "C:/bun_zipper.ply"
     input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
@@ -72,6 +89,9 @@ if __name__ == "__main__":
     except ValueError as error:
         raise RuntimeError(f"ElZeinの埋め込みに失敗しました: {error}") from error
     embed_time = time.time() - start_embed
+    # Keep the pre-attack result: yellow visualization must show watermark
+    # embedding changes, not changes introduced by the subsequent attack.
+    xyz_embedded = xyz_after.copy()
     triangles_after = triangles.copy()
 
     xyz_after, triangles_after = DW2F.apply_mesh_attack(
@@ -115,13 +135,7 @@ if __name__ == "__main__":
         if not show:
             DW2F.evaluate_angular_similarity(pcd_before, pcd_after)
     if show:
-        if len(xyz_after) == len(xyz):
-            DW2F.visualize_embedded_points(xyz, xyz_after)
-        else:
-            print(
-                "[ElZein] Skip embedded-point comparison: "
-                f"vertex count changed ({len(xyz)} -> {len(xyz_after)})."
-            )
+        DW2F.visualize_embedded_points(xyz, xyz_embedded)
         DW2F.visualize_triangle_mesh(xyz_after, triangles_after)
         o3d.visualization.draw_geometries([pcd_after])
         
