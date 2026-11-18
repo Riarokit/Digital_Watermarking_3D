@@ -1,18 +1,10 @@
-"""Correspondence-distance calibration for the proposed method.
+"""Correspondence calibration for the current DW2 mesh-attack experiment.
 
-This script evaluates the two correspondence thresholds without embedding a
-watermark.  The correspondence decision depends on the geometric relation
-between the original and attacked point clouds; the small embedding
-displacement is immaterial for this calibration.
-
-It reports and saves:
-  * index correspondence: fraction whose same-index distance exceeds each
-    threshold (only attacks retaining the number of points), and
-  * coordinate correspondence: fraction of original points accepted by a
-    nearest-neighbour coordinate match.
-
-The distances are normalized by the median nearest-neighbour spacing of the
-attacked point cloud, as in DW1_X1_func.py.
+No watermark is embedded.  This script measures the correspondence path used
+by the proposed and El Zein extractors under the attacks in ``DW2_exp``.
+Count-preserving attacks use bidir's cluster-local one-to-one assignment;
+cropping and voxel downsampling use the intended coordinate many-to-one
+fallback because their vertex count changes.
 """
 
 from __future__ import annotations
@@ -20,7 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 import open3d as o3d
@@ -28,47 +20,65 @@ from scipy.spatial import cKDTree
 
 try:
     import matplotlib.pyplot as plt
-except ImportError:  # CSV and terminal tables remain usable without plotting.
+except ImportError:
     plt = None
 
+import DW1_X1_func as DW1X1
 import DW2_func as DW2F
 
 
-# Include the current values (20, 2) and the former common value (30).
+# Threshold candidates, including the current DW2 setting (30).
 FACTORS = (1.0, 2.0, 3.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0)
-INDEX_DISPLAY_FACTORS = (10.0, 15.0, 20.0, 30.0)
-COORDINATE_DISPLAY_FACTORS = (1.0, 2.0, 3.0, 10.0, 30.0)
+DISPLAY_FACTORS = (1.0, 2.0, 3.0, 10.0, 30.0)
 DEFAULT_INPUTS = ("C:/bun_zipper.ply", "C:/dragon.ply", "C:/Armadillo.ply")
 
 # =========================================================
-# Attack settings for this calibration
-# Edit these lists for ordinary use; no command-line arguments are needed.
-# The graph uses the last value of each list as its representative condition.
+# Same attack ranges and options as DW2_exp.py.
 # =========================================================
-NOISE_LEVELS = (2.0,)                 # Gaussian noise percentage
-SMOOTHING_ITERATIONS = (50,)          # Laplacian-smoothing iteration count
-REORDERING_RATIOS = (0.1, 0.5, 1.0)   # fraction of vertices reordered
-CROP_KEEP_RATIOS = (0.3,)             # fraction retained by x-axis cropping
-VOXEL_PERCENTS = (0.8, 1.0, 1.2)      # voxel side / bounding-box diagonal (%)
+NOISE_LEVELS = (0.5, 0.8, 1.0)
+SMOOTHING_ITERATIONS = (10, 30, 50)
+REORDERING_RATIOS = (0.1, 0.5, 1.0)
+CROP_KEEP_RATIOS = (0.7, 0.5, 0.3)
+VOXEL_PERCENTS = (0.8, 1.0, 1.2)
+NOISE_MODE = "gaussian"
+SMOOTHING_LAMBDA = 0.1
+CROPPING_MODE = "axis"
+CROPPING_AXIS = 0
+DOWNSAMPLING_MODE = "voxel"
+ATTACK_SEED = 42
+
+# Same bidir settings as DW2_exp.py's proposed method.
+CLUSTER_POINTS = 2000
+COORDINATE_DISTANCE_FACTOR = 30.0
+ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
+ONE_TO_ONE_WORKERS = 0
 
 
-def read_and_normalize(path: str) -> np.ndarray:
-    """Read vertices from a point cloud or a triangle mesh, then normalize."""
-    pcd = o3d.io.read_point_cloud(path)
-    if len(pcd.points) == 0:
-        mesh = o3d.io.read_triangle_mesh(path)
-        if len(mesh.vertices) == 0:
-            raise ValueError(f"No point-cloud or mesh vertices found: {path}")
-        pcd.points = mesh.vertices
+def read_and_normalize_mesh(path: str) -> tuple[np.ndarray, np.ndarray]:
+    """Read a triangle mesh and apply the project's standard normalization."""
+    mesh = o3d.io.read_triangle_mesh(path)
+    if len(mesh.vertices) == 0 or len(mesh.triangles) == 0:
+        raise ValueError(
+            f"{path} must be a triangle mesh with vertices and triangles; "
+            "DW2 mesh attacks cannot be calibrated from a point cloud alone."
+        )
+    # Match DW2_exp.load_mesh(): several supplied PLY files contain vertices
+    # which are not referenced by any face.  They are harmless for embedding,
+    # but mesh Laplacian smoothing correctly rejects them because they have no
+    # 1-ring neighbours.
+    vertices, triangles, _ = DW2F.remove_unreferenced_vertices(
+        np.asarray(mesh.vertices), np.asarray(mesh.triangles)
+    )
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(vertices)
     normalized = DW2F.normalize_point_cloud(pcd)
-    xyz = np.asarray(normalized.points, dtype=np.float64).copy()
-    if len(xyz) < 2:
-        raise ValueError(f"At least two points are required: {path}")
-    return xyz
+    return (
+        np.asarray(normalized.points, dtype=np.float64).copy(),
+        triangles,
+    )
 
 
 def attacked_spacing(xyz: np.ndarray) -> float:
-    """Median nearest-neighbour distance used as the normalization scale."""
     distances, _ = cKDTree(xyz).query(xyz, k=2)
     nearest = distances[:, 1]
     nearest = nearest[np.isfinite(nearest) & (nearest > 0)]
@@ -77,23 +87,42 @@ def attacked_spacing(xyz: np.ndarray) -> float:
     return float(np.median(nearest))
 
 
-def measure_distances(original: np.ndarray, attacked: np.ndarray) -> tuple[float, np.ndarray, Optional[np.ndarray]]:
-    """Return spacing, coordinate distances, and same-index distances."""
+def normalized_coordinate_distances(
+    original: np.ndarray, attacked: np.ndarray
+) -> tuple[float, np.ndarray]:
+    """Distances used by the coordinate many-to-one fallback."""
     spacing = attacked_spacing(attacked)
-    coordinate_distances, _ = cKDTree(attacked).query(original, k=1)
-    coordinate_distances = coordinate_distances / spacing
-    index_distances = None
-    if len(original) == len(attacked):
-        index_distances = np.linalg.norm(original - attacked, axis=1) / spacing
-    return spacing, coordinate_distances, index_distances
+    distances, _ = cKDTree(attacked).query(original, k=1)
+    return spacing, np.asarray(distances, dtype=np.float64) / spacing
+
+
+def normalized_bidir_distances(
+    original: np.ndarray, attacked: np.ndarray, labels: np.ndarray
+) -> tuple[float, np.ndarray, str]:
+    """Run bidir when possible, otherwise the same coordinate fallback as DW1."""
+    if len(original) != len(attacked):
+        spacing, distances = normalized_coordinate_distances(original, attacked)
+        return spacing, distances, "coordinate many-to-one (count-change fallback)"
+    try:
+        _, _matched, distances, _threshold = DW1X1.match_point_cloud_one_to_one(
+            attacked,
+            original,
+            labels,
+            distance_factor=COORDINATE_DISTANCE_FACTOR,
+            candidate_counts=ONE_TO_ONE_CANDIDATES,
+            workers=ONE_TO_ONE_WORKERS,
+            verbose=False,
+            mode="bidir",
+        )
+        spacing = attacked_spacing(attacked)
+        return spacing, np.asarray(distances, dtype=np.float64) / spacing, "bidir one-to-one"
+    except (RuntimeError, ValueError) as error:
+        spacing, distances = normalized_coordinate_distances(original, attacked)
+        return spacing, distances, f"coordinate many-to-one (bidir failed: {error})"
 
 
 def fraction_leq(distances: np.ndarray, factor: float) -> float:
-    return float(np.mean(distances <= factor))
-
-
-def fraction_gt(distances: np.ndarray, factor: float) -> float:
-    return float(np.mean(distances > factor))
+    return float(np.mean(np.isfinite(distances) & (distances <= factor)))
 
 
 def format_factor(factor: float) -> str:
@@ -101,7 +130,6 @@ def format_factor(factor: float) -> str:
 
 
 def parse_number_list(text: str, argument_name: str) -> list[float]:
-    """Parse a non-empty comma-separated list used for attack parameters."""
     try:
         values = [float(value.strip()) for value in text.split(",") if value.strip()]
     except ValueError as error:
@@ -120,209 +148,173 @@ def write_csv(path: Path, rows: list[dict[str, object]], fieldnames: list[str]) 
         writer.writerows(rows)
 
 
-def print_index_table(rows: list[dict[str, object]]) -> None:
-    print("\n[Index correspondence: percentage judged inconsistent]")
-    header = ["model", "attack", "parameter", "q99", "max"] + [f"> {f:g}" for f in INDEX_DISPLAY_FACTORS]
+def print_table(rows: list[dict[str, object]]) -> None:
+    print("\n[Correspondence acceptance: coordinate many-to-one vs bidir path]")
+    header = ["model", "attack", "parameter", "path", "Natt/Norig", "bidir@30"]
+    header += [f"coord <= {factor:g}" for factor in DISPLAY_FACTORS]
     print(" | ".join(header))
     print("-|-".join("---" for _ in header))
     for row in rows:
         values = [
             str(row["model"]), str(row["attack"]), str(row["parameter"]),
-            f"{float(row['index_q99']):.2f}", f"{float(row['index_max']):.2f}",
+            str(row["bidir_path"]), f"{float(row['point_ratio']):.3f}",
+            f"{100.0 * float(row['bidir_accept_30']):.2f}%",
         ]
-        values += [f"{100.0 * float(row[f'index_bad_{f:g}']):.3f}%" for f in INDEX_DISPLAY_FACTORS]
+        values += [
+            f"{100.0 * float(row[f'coordinate_accept_{factor:g}']):.2f}%"
+            for factor in DISPLAY_FACTORS
+        ]
         print(" | ".join(values))
 
 
-def print_coordinate_table(rows: list[dict[str, object]]) -> None:
-    print("\n[Coordinate correspondence: percentage accepted]")
-    header = ["model", "attack", "parameter", "Natt/Norig", "q95", "max"] + [f"<= {f:g}" for f in COORDINATE_DISPLAY_FACTORS]
-    print(" | ".join(header))
-    print("-|-".join("---" for _ in header))
-    for row in rows:
-        values = [
-            str(row["model"]), str(row["attack"]), str(row["parameter"]),
-            f"{float(row['point_ratio']):.3f}", f"{float(row['coordinate_q95']):.2f}", f"{float(row['coordinate_max']):.2f}",
-        ]
-        values += [f"{100.0 * float(row[f'coordinate_accept_{f:g}']):.3f}%" for f in COORDINATE_DISPLAY_FACTORS]
-        print(" | ".join(values))
-
-
-def plot_profiles(
-    index_rows: list[dict[str, object]],
-    coordinate_rows: list[dict[str, object]],
-    output_path: Path,
-    index_selected: tuple[tuple[str, str], ...],
-    coordinate_selected: tuple[tuple[str, str], ...],
-) -> bool:
-    """Plot the strongest representative attacks, averaged across models."""
+def plot_profiles(rows: list[dict[str, object]], output_path: Path) -> bool:
     if plt is None:
         return False
     figure, axes = plt.subplots(1, 2, figsize=(14, 5), constrained_layout=True)
-
-    for attack, parameter in index_selected:
-        selected = [r for r in index_rows if r["attack"] == attack and r["parameter"] == parameter]
+    for attack in ("noise", "smoothing", "reordering", "cropping", "downsampling"):
+        selected = [row for row in rows if row["attack"] == attack]
         if not selected:
             continue
-        values = [100.0 * np.mean([float(r[f"index_bad_{f:g}"]) for r in selected]) for f in FACTORS]
-        axes[0].plot(FACTORS, values, marker="o", label=f"{attack} ({parameter})")
-    axes[0].axhline(1.0, color="gray", linestyle="--", linewidth=1, label="allowed ratio 1%")
-    axes[0].axvline(20.0, color="tab:green", linestyle=":", label="current index factor = 20")
-    axes[0].axvline(30.0, color="tab:red", linestyle=":", label="former factor = 30")
-    axes[0].set_title("Same-index inconsistency rate")
-    axes[0].set_xlabel("index_distance_factor")
-    axes[0].set_ylabel("inconsistent points (%)")
-    axes[0].set_ylim(bottom=0)
-    axes[0].grid(alpha=0.3)
-    axes[0].legend(fontsize=8)
-
-    for attack, parameter in coordinate_selected:
-        selected = [r for r in coordinate_rows if r["attack"] == attack and r["parameter"] == parameter]
-        if not selected:
-            continue
-        values = [100.0 * np.mean([float(r[f"coordinate_accept_{f:g}"]) for r in selected]) for f in FACTORS]
-        axes[1].plot(FACTORS, values, marker="o", label=f"{attack} ({parameter})")
-    axes[1].axvline(2.0, color="tab:green", linestyle=":", label="current coordinate factor = 2")
-    axes[1].axvline(30.0, color="tab:red", linestyle=":", label="former factor = 30")
-    axes[1].set_title("Coordinate-match acceptance rate")
-    axes[1].set_xlabel("coordinate_distance_factor")
-    axes[1].set_ylabel("original points accepted (%)")
-    axes[1].set_ylim(-2, 102)
-    axes[1].grid(alpha=0.3)
-    axes[1].legend(fontsize=8)
-
+        coordinate = [
+            100.0 * np.mean([float(row[f"coordinate_accept_{factor:g}"]) for row in selected])
+            for factor in FACTORS
+        ]
+        bidir = [
+            100.0 * np.mean([float(row[f"bidir_accept_{factor:g}"]) for row in selected])
+            for factor in FACTORS
+        ]
+        axes[0].plot(FACTORS, coordinate, marker="o", label=attack)
+        axes[1].plot(FACTORS, bidir, marker="o", label=attack)
+    for axis, title in zip(
+        axes, ("Coordinate many-to-one acceptance", "bidir path acceptance")
+    ):
+        axis.axvline(
+            COORDINATE_DISTANCE_FACTOR,
+            color="tab:red",
+            linestyle=":",
+            label=f"DW2 factor = {COORDINATE_DISTANCE_FACTOR:g}",
+        )
+        axis.set_title(title)
+        axis.set_xlabel("coordinate_distance_factor")
+        axis.set_ylabel("original points accepted (%)")
+        axis.set_ylim(-2, 102)
+        axis.grid(alpha=0.3)
+        axis.legend(fontsize=8)
     figure.savefig(output_path, dpi=200)
     plt.close(figure)
     return True
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Calibrate index and coordinate correspondence thresholds.")
+    parser = argparse.ArgumentParser(
+        description="Calibrate current DW2 mesh attacks and bidir/fallback correspondence."
+    )
     parser.add_argument(
         "--input", action="append", dest="inputs", metavar="PATH",
-        help="Input model path. Repeat for multiple models. Defaults to the three standard models.",
+        help="Triangle-mesh path; repeat for multiple models.",
     )
-    parser.add_argument("--output-prefix", default="DW3_demo_corrdis", help="Prefix for CSV and PNG reports.")
-    parser.add_argument("--noise-levels", metavar="PERCENTAGES",
-                        help="Optional comma-separated override of NOISE_LEVELS.")
-    parser.add_argument("--smoothing-iterations", metavar="COUNTS",
-                        help="Optional comma-separated override of SMOOTHING_ITERATIONS.")
-    parser.add_argument("--reordering-ratios", metavar="RATIOS",
-                        help="Optional comma-separated override of REORDERING_RATIOS.")
-    parser.add_argument("--crop-keep-ratios", metavar="RATIOS",
-                        help="Optional comma-separated override of CROP_KEEP_RATIOS.")
-    parser.add_argument("--voxel-percents", metavar="PERCENTAGES",
-                        help="Optional comma-separated override of VOXEL_PERCENTS.")
+    parser.add_argument("--output-prefix", default="DW3_demo_corrdis")
+    parser.add_argument("--noise-levels", metavar="PERCENTAGES")
+    parser.add_argument("--smoothing-iterations", metavar="COUNTS")
+    parser.add_argument("--reordering-ratios", metavar="RATIOS")
+    parser.add_argument("--crop-keep-ratios", metavar="RATIOS")
+    parser.add_argument("--voxel-percents", metavar="PERCENTAGES")
     args = parser.parse_args()
 
     inputs = args.inputs if args.inputs else list(DEFAULT_INPUTS)
-    noise_levels = parse_number_list(args.noise_levels, "--noise-levels") if args.noise_levels else list(NOISE_LEVELS)
-    smoothing_iterations = parse_number_list(args.smoothing_iterations, "--smoothing-iterations") if args.smoothing_iterations else list(SMOOTHING_ITERATIONS)
-    reordering_ratios = parse_number_list(args.reordering_ratios, "--reordering-ratios") if args.reordering_ratios else list(REORDERING_RATIOS)
-    crop_keep_ratios = parse_number_list(args.crop_keep_ratios, "--crop-keep-ratios") if args.crop_keep_ratios else list(CROP_KEEP_RATIOS)
-    voxel_percents = parse_number_list(args.voxel_percents, "--voxel-percents") if args.voxel_percents else list(VOXEL_PERCENTS)
-    if any(not 0.0 < ratio <= 1.0 for ratio in reordering_ratios + crop_keep_ratios):
-        parser.error("Values of --reordering-ratios and --crop-keep-ratios must be in (0, 1].")
-    if any(value <= 0.0 for value in noise_levels + smoothing_iterations + voxel_percents):
-        parser.error("Noise levels, smoothing iterations, and voxel percentages must be positive.")
+    noise = parse_number_list(args.noise_levels, "--noise-levels") if args.noise_levels else list(NOISE_LEVELS)
+    smoothing = parse_number_list(args.smoothing_iterations, "--smoothing-iterations") if args.smoothing_iterations else list(SMOOTHING_ITERATIONS)
+    reorder = parse_number_list(args.reordering_ratios, "--reordering-ratios") if args.reordering_ratios else list(REORDERING_RATIOS)
+    crop = parse_number_list(args.crop_keep_ratios, "--crop-keep-ratios") if args.crop_keep_ratios else list(CROP_KEEP_RATIOS)
+    voxel = parse_number_list(args.voxel_percents, "--voxel-percents") if args.voxel_percents else list(VOXEL_PERCENTS)
+    if any(not 0.0 < value <= 1.0 for value in reorder + crop):
+        parser.error("Reordering and crop ratios must be in (0, 1].")
+    if any(value <= 0.0 for value in noise + smoothing + voxel):
+        parser.error("Noise, smoothing, and voxel values must be positive.")
 
-    # The graph plots the last supplied value for each attack. Thus its
-    # condition can be selected simply by supplying the desired value last.
-    index_selected = (
-        ("noise", f"{format_factor(noise_levels[-1])}%"),
-        ("smoothing", format_factor(smoothing_iterations[-1])),
-        ("reordering", f"{format_factor(reordering_ratios[-1] * 100.0)}%"),
-    )
-    coordinate_selected = (
-        ("cropping", f"{format_factor(crop_keep_ratios[-1] * 100.0)}% retained"),
-        ("downsampling", f"{format_factor(voxel_percents[-1])}%"),
-    )
     prefix = Path(args.output_prefix)
-    index_rows: list[dict[str, object]] = []
-    coordinate_rows: list[dict[str, object]] = []
-
+    rows: list[dict[str, object]] = []
     for model_path in inputs:
         source = Path(model_path)
-        model = source.stem
         print(f"\nLoading {source} ...")
-        original = read_and_normalize(str(source))
+        original, triangles = read_and_normalize_mesh(str(source))
+        labels = DW1X1.kmeans_cluster_points(
+            original, cluster_point=CLUSTER_POINTS, seed=ATTACK_SEED
+        )
+        experiments: list[tuple[str, str, Callable[[], tuple[np.ndarray, np.ndarray]]]] = []
+        for value in noise:
+            experiments.append((
+                "noise", f"{format_factor(value)}%",
+                lambda value=value: DW2F.apply_mesh_attack(
+                    original, triangles, "noise", value, ATTACK_SEED, noise_mode=NOISE_MODE
+                ),
+            ))
+        for value in smoothing:
+            experiments.append((
+                "smoothing", format_factor(value),
+                lambda value=value: DW2F.apply_mesh_attack(
+                    original, triangles, "smoothing", value, ATTACK_SEED,
+                    smoothing_lambda=SMOOTHING_LAMBDA,
+                ),
+            ))
+        for value in reorder:
+            experiments.append((
+                "reordering", f"{format_factor(value * 100)}%",
+                lambda value=value: DW2F.apply_mesh_attack(
+                    original, triangles, "reordering", value, ATTACK_SEED
+                ),
+            ))
+        for value in crop:
+            experiments.append((
+                "cropping", f"{format_factor(value * 100)}% retained",
+                lambda value=value: DW2F.apply_mesh_attack(
+                    original, triangles, "cropping", value, ATTACK_SEED,
+                    cropping_mode=CROPPING_MODE, cropping_axis=CROPPING_AXIS,
+                ),
+            ))
+        for value in voxel:
+            experiments.append((
+                "downsampling", f"{format_factor(value)}%",
+                lambda value=value: DW2F.apply_mesh_attack(
+                    original, triangles, "downsampling", value, ATTACK_SEED,
+                    downsampling_mode=DOWNSAMPLING_MODE,
+                ),
+            ))
 
-        # (attack name, parameter label, attack operation, examine same indices)
-        experiments: list[tuple[str, str, Callable[[np.ndarray], np.ndarray], bool]] = []
-        experiments += [
-            ("noise", f"{format_factor(value)}%", lambda x, value=value: DW2F.noise_addition_attack(x, value, "gaussian", seed=42), True)
-            for value in noise_levels
-        ]
-        experiments += [
-            ("smoothing", format_factor(value), lambda x, value=value: DW2F.smoothing_attack(x, lambda_val=0.5, iterations=int(value), k=6, verbose=False), True)
-            for value in smoothing_iterations
-        ]
-        experiments += [
-            ("reordering", f"{format_factor(value * 100.0)}%", lambda x, value=value: DW2F.vertex_reordering_attack(x, value, seed=42), True)
-            for value in reordering_ratios
-        ]
-        # Match the journal/experimental setting: crop along the x axis.
-        experiments += [
-            ("cropping", f"{format_factor(value * 100.0)}% retained", lambda x, value=value: DW2F.cropping_attack(x, keep_ratio=value, mode="axis", axis=0), False)
-            for value in crop_keep_ratios
-        ]
-        experiments += [
-            ("downsampling", f"{format_factor(value)}%", lambda x, value=value: DW2F.downsampling_attack(x, voxel_size_percent=value), False)
-            for value in voxel_percents
-        ]
-
-        for attack_name, parameter, operation, check_index in experiments:
-            print(f"  {attack_name}: {parameter}")
-            attacked = np.asarray(operation(original), dtype=np.float64)
-            spacing, coordinate_distances, index_distances = measure_distances(original, attacked)
-            common = {
-                "model": model,
-                "attack": attack_name,
-                "parameter": parameter,
-                "original_points": len(original),
-                "attacked_points": len(attacked),
+        for attack, parameter, operation in experiments:
+            print(f"  {attack}: {parameter}")
+            attacked, _ = operation()
+            coord_spacing, coordinate = normalized_coordinate_distances(original, attacked)
+            bidir_spacing, bidir, bidir_path = normalized_bidir_distances(
+                original, attacked, labels
+            )
+            row: dict[str, object] = {
+                "model": source.stem, "attack": attack, "parameter": parameter,
+                "original_points": len(original), "attacked_points": len(attacked),
                 "point_ratio": len(attacked) / len(original),
-                "attacked_spacing": spacing,
-                "coordinate_q95": float(np.quantile(coordinate_distances, 0.95)),
-                "coordinate_max": float(np.max(coordinate_distances)),
+                "coordinate_spacing": coord_spacing, "bidir_spacing": bidir_spacing,
+                "coordinate_q95": float(np.quantile(coordinate, 0.95)),
+                "coordinate_max": float(np.max(coordinate)),
+                "bidir_q95": float(np.quantile(bidir, 0.95)),
+                "bidir_max": float(np.max(bidir)), "bidir_path": bidir_path,
             }
-            coordinate_row = dict(common)
             for factor in FACTORS:
-                coordinate_row[f"coordinate_accept_{factor:g}"] = fraction_leq(coordinate_distances, factor)
-            coordinate_rows.append(coordinate_row)
+                row[f"coordinate_accept_{factor:g}"] = fraction_leq(coordinate, factor)
+                row[f"bidir_accept_{factor:g}"] = fraction_leq(bidir, factor)
+            rows.append(row)
 
-            if check_index and index_distances is not None:
-                index_row = dict(common)
-                index_row["index_q99"] = float(np.quantile(index_distances, 0.99))
-                index_row["index_max"] = float(np.max(index_distances))
-                for factor in FACTORS:
-                    index_row[f"index_bad_{factor:g}"] = fraction_gt(index_distances, factor)
-                index_rows.append(index_row)
-
-    index_fields = list(index_rows[0].keys()) if index_rows else []
-    coordinate_fields = list(coordinate_rows[0].keys()) if coordinate_rows else []
-    index_csv = prefix.with_name(prefix.name + "_index.csv")
-    coordinate_csv = prefix.with_name(prefix.name + "_coordinate.csv")
-    figure_path = prefix.with_name(prefix.name + ".png")
-    if index_rows:
-        write_csv(index_csv, index_rows, index_fields)
-        print_index_table(index_rows)
-    if coordinate_rows:
-        write_csv(coordinate_csv, coordinate_rows, coordinate_fields)
-        print_coordinate_table(coordinate_rows)
-    figure_written = plot_profiles(
-        index_rows, coordinate_rows, figure_path, index_selected, coordinate_selected
-    )
-
+    if not rows:
+        raise RuntimeError("No calibration rows were produced.")
+    csv_path = prefix.with_name(prefix.name + "_correspondence.csv")
+    png_path = prefix.with_name(prefix.name + ".png")
+    write_csv(csv_path, rows, list(rows[0].keys()))
+    print_table(rows)
+    figure_written = plot_profiles(rows, png_path)
     print("\nSaved reports:")
-    print(f"  {index_csv}")
-    print(f"  {coordinate_csv}")
-    if figure_written:
-        print(f"  {figure_path}")
-    else:
-        print("  PNG was skipped (matplotlib is not installed).")
-    print("\nInterpretation: choose the smallest factor that retains intended matches.")
-    print("For cropping, acceptance substantially above the retained-point ratio indicates false coordinate matches.")
+    print(f"  {csv_path}")
+    print(f"  {png_path}" if figure_written else "  PNG was skipped (matplotlib is not installed).")
+    print("\nNote: cropping/downsampling always show the coordinate many-to-one fallback;")
+    print("they cannot use bidir because the received vertex count is lower.")
 
 
 if __name__ == "__main__":
