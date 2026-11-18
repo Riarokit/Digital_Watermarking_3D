@@ -20,11 +20,11 @@ import DW2_func as DW2F
 
 # 共通設定
 TARGET_PSNR = 60.0
-# INPUT_FILE = "C:/bun_zipper.ply"
+INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/dragon.ply"
-INPUT_FILE = "C:/Armadillo.ply"
-IMAGE_PATH = "watermark16.bmp"
-WATERMARK_SIZE = 16
+# INPUT_FILE = "C:/Armadillo.ply"
+IMAGE_PATH = "watermark8.bmp"
+WATERMARK_SIZE = 8
 NUM_EMBEDDING_TRIALS = 5
 NUM_ATTACK_TRIALS = 5
 EMBEDDING_SEED_BASE = 42
@@ -41,17 +41,17 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [0.5, 0.8, 1.0]),
-    ("smoothing", [10, 30, 50]),
-    ("cropping", [0.7, 0.5, 0.3]),
-    ("reordering", [0.1, 0.5, 1.0]),
-    ("downsampling", [0.8, 1.0, 1.2]),
+    ("noise", [1.2, 1.5]),
+    ("smoothing", [30, 50]),
+    # ("cropping", [0.5, 0.3]),
+    # ("reordering", [1.0]),
+    ("downsampling", [1.5, 2.0]),
     # ("visual_quality", [None]),
 ]
 
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.1
+SMOOTHING_LAMBDA = 0.2
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
@@ -62,14 +62,14 @@ KNN_K = 24
 GRAPH_RADIUS = 0.03
 # auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
 PROPOSED_CORRESPONDENCE_MODE = "bidir"
-PROPOSED_INDEX_DISTANCE_FACTOR = 30.0
-PROPOSED_COORDINATE_DISTANCE_FACTOR = 30.0
+PROPOSED_INDEX_DISTANCE_FACTOR = 3.0
+PROPOSED_COORDINATE_DISTANCE_FACTOR = 3.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
 PROPOSED_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
 PROPOSED_ONE_TO_ONE_WORKERS = 0
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
-CLUSTER_POINTS_PROPOSED = [2000]
+CLUSTER_POINTS_PROPOSED = [500]
 BANDS = [
     ("All", 0.0, 1.0, 1.6e-3),
     ("Low", 0.0, 0.2, 3.6e-3),
@@ -85,16 +85,16 @@ HU_INITIAL_FIDEP = 53.0
 HU_T = "auto"   # "auto" or a positive integer
 HU_ARNOLD_ITERATIONS = 20
 HU_CORRESPONDENCE_MODE = "coordinate"  # auto, index, or coordinate
-HU_COORDINATE_DISTANCE_FACTOR = 30.0
+HU_COORDINATE_DISTANCE_FACTOR = 3.0
 
 # El Zein手法
 ELZEIN_CORRESPONDENCE_MODE = "bidir"  # auto / index / coordinate / hk / auction / bidir
-ELZEIN_INDEX_DISTANCE_FACTOR = 30.0
-ELZEIN_COORDINATE_DISTANCE_FACTOR = 30.0
+ELZEIN_INDEX_DISTANCE_FACTOR = 3.0
+ELZEIN_COORDINATE_DISTANCE_FACTOR = 3.0
 ELZEIN_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
 ELZEIN_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
 ELZEIN_ONE_TO_ONE_WORKERS = 0
-ELZEIN_CLUSTER_POINTS = 400
+ELZEIN_CLUSTER_POINTS = 100
 
 def point_cloud(vertices):
     pcd = o3d.geometry.PointCloud()

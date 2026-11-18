@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # === 埋込設定 ===
     image_path = "watermark8.bmp"
     n = 8
-    cluster_point = 500
+    cluster_point = 2000
     graph_mode = 'knn'
     k = 24
     radius = 0.03
@@ -66,13 +66,13 @@ if __name__ == "__main__":
     # === メッシュ別埋込プリセット ===
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
-    # beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
+    beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
     # beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
     # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
-    beta = 2.9e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
+    # beta = 2.9e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/dragon.ply"
     # Dragon高周波用
     # beta = 2.9e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Armadillo全周波用
@@ -113,6 +113,18 @@ if __name__ == "__main__":
     # labels = DW1X1.region_growing_cluster_points(xyz)
     # labels = DW1X1.ransac_cluster_points(xyz)
     # labels = DW1X1.split_large_clusters(xyz, labels, limit_points=3000)
+    if show:
+        # Confirm the embedding clusters and their PCA pseudo-planes before
+        # watermarking. ``None`` deliberately displays every cluster.
+        cluster_colors = DW1X1.visualize_clusters(xyz, labels)
+        DW1X1.visualize_clusters_with_pseudoplanes(
+            xyz,
+            labels,
+            cluster_colors,
+            scale=1.2,
+            max_planes=None,
+            show_frame=False,
+        )
 
     # 5. 単多数決方式の埋め込み
     xyz_after = DW1X1.embed_watermark_x1(
