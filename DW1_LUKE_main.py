@@ -38,7 +38,7 @@ if __name__ == "__main__":
     # ======================
 
     # 1. データ取得
-    image_path = "watermark16.bmp"
+    image_path = "bmp/original/watermark16.bmp"
     input_file = "C:/bun_zipper.ply"
     # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
@@ -185,7 +185,9 @@ if __name__ == "__main__":
     print(f"埋込ビット長：{len(watermark_bits)}")
     print(f"抽出ビット長：{len(recovered_bits)}")
     DW2F.evaluate_robustness(watermark_bits, recovered_bits)
-    DW2F.bitarray_to_image(recovered_bits, n=n, save_path="luke_recovered.bmp")
+    DW2F.bitarray_to_image(
+        recovered_bits, n=n, save_path="bmp/recovered/luke_recovered.bmp"
+    )
     
     # 8. 固有評価
     print(f"[Luke] 埋め込み要求要素数: {key_info.requested_watermark_size}")

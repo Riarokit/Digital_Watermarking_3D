@@ -213,7 +213,7 @@ def main() -> None:
         "--input", action="append", dest="inputs", metavar="PATH",
         help="Triangle-mesh path; repeat for multiple models.",
     )
-    parser.add_argument("--output-prefix", default="DW3_demo_corrdis")
+    parser.add_argument("--output-prefix", default="figures/DW3_demo_corrdis")
     parser.add_argument("--noise-levels", metavar="PERCENTAGES")
     parser.add_argument("--smoothing-iterations", metavar="COUNTS")
     parser.add_argument("--reordering-ratios", metavar="RATIOS")
@@ -233,6 +233,7 @@ def main() -> None:
         parser.error("Noise, smoothing, and voxel values must be positive.")
 
     prefix = Path(args.output_prefix)
+    prefix.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, object]] = []
     for model_path in inputs:
         source = Path(model_path)

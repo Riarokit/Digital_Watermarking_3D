@@ -39,7 +39,7 @@ def _arrow(ax, start, end, color, rad=0.0, linewidth=1.7, zorder=1):
     ax.add_patch(arrow)
 
 
-def create_assignment_figure(output: str = "DW3_demo_assign.png", show=False):
+def create_assignment_figure(output: str = "figures/DW3_demo_assign.png", show=False):
     """Generate and save a publication-ready correspondence diagram."""
     fig, ax = plt.subplots(figsize=(7.2, 7.2))
 
@@ -100,6 +100,7 @@ def create_assignment_figure(output: str = "DW3_demo_assign.png", show=False):
     fig.tight_layout(pad=0.5)
 
     output_path = Path(output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight", facecolor="white")
     print(f"Saved correspondence figure: {output_path}")
 
@@ -115,8 +116,8 @@ def parse_args():
     )
     parser.add_argument(
         "--output",
-        default="DW3_demo_assign.png",
-        help="Output image path (default: DW3_demo_assign.png)",
+        default="figures/DW3_demo_assign.png",
+        help="Output image path (default: figures/DW3_demo_assign.png)",
     )
     parser.add_argument("--show", action="store_true", help="Display the figure")
     return parser.parse_args()

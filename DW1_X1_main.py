@@ -36,7 +36,7 @@ if __name__ == "__main__":
           "reordering"（並べ替え率 0–1）。attack_seed は乱数シード。
     """
     # === 埋込設定 ===
-    image_path = "watermark8.bmp"
+    image_path = "bmp/original/watermark8.bmp"
     n = 8
     cluster_point = 2000
     graph_mode = 'knn'
@@ -198,7 +198,9 @@ if __name__ == "__main__":
     if unknown_count:
         print(f"[Proposed] undecodable watermark bits: {unknown_count}")
     display_bits = np.where(np.asarray(extracted_bits) < 0, 0, extracted_bits)
-    DW2F.bitarray_to_image(display_bits, n=n, save_path="recovered.bmp")
+    DW2F.bitarray_to_image(
+        display_bits, n=n, save_path="bmp/recovered/proposed_recovered.bmp"
+    )
 
     # 9. 固有評価
     print(f"埋込時間: {embed_time:.2f}秒")

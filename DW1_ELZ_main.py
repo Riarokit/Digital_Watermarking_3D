@@ -25,7 +25,7 @@ if __name__ == "__main__":
     """
 
     # === 埋込設定 ===
-    image_path = "watermark16.bmp"
+    image_path = "bmp/original/watermark16.bmp"
     n = 16
     # === 対応付け設定 ===
     correspondence_mode = "hk"
@@ -148,7 +148,9 @@ if __name__ == "__main__":
     if unknown_count:
         print(f"[ElZein] undecodable watermark bits: {unknown_count}")
     display_bits = np.where(np.asarray(extracted_bits) < 0, 0, extracted_bits)
-    DW2F.bitarray_to_image(display_bits, n=n, save_path="elzein_recovered.bmp")
+    DW2F.bitarray_to_image(
+        display_bits, n=n, save_path="bmp/recovered/elzein_recovered.bmp"
+    )
 
     # 8. 固有評価
     print("[ElZein] Portion 2-only / grouped redundant majority voting")

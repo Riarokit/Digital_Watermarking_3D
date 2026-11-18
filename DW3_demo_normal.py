@@ -1,8 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from pathlib import Path
 
 """
-M3において、法線方向にのみ変位を加えたときの点の移動の様子を示す
+X1において、点群を波形ととらえて動かすことを実演したアニメーション
 """
 
 def generate_paper_figure_final():
@@ -134,7 +135,9 @@ def generate_paper_figure_final():
     # ax3.legend(loc='lower center', frameon=True)
 
     plt.tight_layout()
-    plt.savefig("gft_normal.png", dpi=300, bbox_inches='tight')
+    output_path = Path("figures/gft_normal.png")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.show()
     print("画像を 'gft_normal.png' として保存しました。")
 
