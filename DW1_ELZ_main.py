@@ -28,12 +28,12 @@ if __name__ == "__main__":
     image_path = "bmp/original/watermark16.bmp"
     n = 16
     # === 対応付け設定 ===
-    correspondence_mode = "hk"
+    correspondence_mode = "bidir"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
     one_to_one_workers = 0
     # === 攻撃設定 ===
-    attack_type = "smoothing"
-    attack_parameter = 50
+    attack_type = "downsampling"
+    attack_parameter = 1.2
     attack_seed = 42
     noise_mode = "gaussian"
     smoothing_lambda = 0.1
@@ -50,8 +50,8 @@ if __name__ == "__main__":
     # a = 3.21e-3  # Armadillo用
 
     # 1. データ取得
-    # input_file = "C:/bun_zipper.ply"
-    input_file = "C:/dragon.ply"
+    input_file = "C:/bun_zipper.ply"
+    # input_file = "C:/dragon.ply"
     # input_file = "C:/Armadillo.ply"
     mesh_before = o3d.io.read_triangle_mesh(input_file)
     if len(mesh_before.vertices) == 0 or len(mesh_before.triangles) == 0:

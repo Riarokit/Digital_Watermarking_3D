@@ -23,8 +23,8 @@ TARGET_PSNR = 60.0
 INPUT_FILE = "C:/bun_zipper.ply"
 # INPUT_FILE = "C:/dragon.ply"
 # INPUT_FILE = "C:/Armadillo.ply"
-IMAGE_PATH = "bmp/original/watermark8.bmp"
-WATERMARK_SIZE = 8
+IMAGE_PATH = "bmp/original/watermark16.bmp"
+WATERMARK_SIZE = 16
 NUM_EMBEDDING_TRIALS = 5
 NUM_ATTACK_TRIALS = 5
 EMBEDDING_SEED_BASE = 42
@@ -41,17 +41,17 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [1.2, 1.5]),
-    ("smoothing", [30, 50]),
-    # ("cropping", [0.5, 0.3]),
-    # ("reordering", [1.0]),
-    ("downsampling", [1.5, 2.0]),
+    ("noise", [0.6]),
+    ("smoothing", [10,30]),
+    ("cropping", [0.7, 0.5, 0.3]),
+    ("reordering", [0.1, 0.5, 1.0]),
+    ("downsampling", [0.8, 1.0]),
     # ("visual_quality", [None]),
 ]
 
 # 攻撃パラメータ
 NOISE_MODE = "gaussian"
-SMOOTHING_LAMBDA = 0.2
+SMOOTHING_LAMBDA = 0.1
 CROPPING_MODE = "axis"
 CROPPING_AXIS = 0
 DOWNSAMPLING_MODE = "voxel"
@@ -69,7 +69,7 @@ PROPOSED_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
 PROPOSED_ONE_TO_ONE_WORKERS = 0
 FLATNESS_WEIGHTING = 0
 K_NEIGHBORS = 20
-CLUSTER_POINTS_PROPOSED = [500]
+CLUSTER_POINTS_PROPOSED = [2000]
 BANDS = [
     ("All", 0.0, 1.0, 1.6e-3),
     ("Low", 0.0, 0.2, 3.6e-3),
@@ -94,7 +94,7 @@ ELZEIN_COORDINATE_DISTANCE_FACTOR = 3.0
 ELZEIN_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
 ELZEIN_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
 ELZEIN_ONE_TO_ONE_WORKERS = 0
-ELZEIN_CLUSTER_POINTS = 100
+ELZEIN_CLUSTER_POINTS = 400
 
 def point_cloud(vertices):
     pcd = o3d.geometry.PointCloud()
