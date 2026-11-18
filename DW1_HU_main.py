@@ -32,7 +32,7 @@ if __name__ == "__main__":
     n = 16
     # === 対応付け設定 ===
     correspondence_mode = "coordinate"
-    hu_coordinate_distance_factor = 30.0
+    hu_coordinate_distance_factor = 3.0
     # === 可視化設定 ===
     show = True
     # === 攻撃設定 ===

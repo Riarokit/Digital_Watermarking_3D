@@ -44,8 +44,8 @@ if __name__ == "__main__":
     radius = 0.03
     flatness_weighting = 0
     # === 対応付け設定 ===
-    index_distance_factor = 30.0
-    coordinate_distance_factor = 30.0
+    index_distance_factor = 3.0
+    coordinate_distance_factor = 3.0
     max_index_inconsistency_ratio = 0.01
     correspondence_mode = "bidir"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
@@ -66,9 +66,9 @@ if __name__ == "__main__":
     # === メッシュ別埋込プリセット ===
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
-    beta = 3.61e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
+    beta = 3.596e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
-    # beta = 3.70e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
+    # beta = 3.59e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
     # beta = 1.32e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/dragon.ply"
     # Dragon低周波用
