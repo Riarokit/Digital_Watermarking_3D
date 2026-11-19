@@ -4,6 +4,7 @@ import contextlib
 import io
 import os
 import sys
+import tempfile
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -42,9 +43,9 @@ COMPARED_METHODS = [
 
 EXPERIMENTS = [
     ("noise", [0.6]),
-    ("smoothing", [10,30]),
-    ("cropping", [0.7, 0.5, 0.3]),
-    ("reordering", [0.1, 0.5, 1.0]),
+    ("smoothing", [30]),
+    ("cropping", [0.3]),
+    # ("reordering", [0.1, 0.5, 1.0]),
     ("downsampling", [0.8, 1.0]),
     # ("visual_quality", [None]),
 ]
@@ -300,6 +301,7 @@ def prepare_methods(
     target_mse,
     embedding_seed,
     deterministic_cache,
+    spectral_cache_root=None,
 ):
     """各方式を一度埋め込み、方式名・頂点・抽出関数をまとめる。"""
     methods = {}
@@ -431,6 +433,11 @@ def prepare_methods(
 
     if "Proposed" in selected_methods:
         for cluster_points in CLUSTER_POINTS_PROPOSED:
+            spectral_cache_dir = (
+                None
+                if spectral_cache_root is None
+                else Path(spectral_cache_root) / f"clusters_{cluster_points}"
+            )
             print(
                 f"\n[Proposed] KMeans: approximately "
                 f"{cluster_points} points/cluster..."
@@ -465,6 +472,7 @@ def prepare_methods(
                 radius=GRAPH_RADIUS,
                 flatness_weighting=FLATNESS_WEIGHTING,
                 k_neighbors=K_NEIGHBORS,
+                spectral_cache_dir=spectral_cache_dir,
             )
             for band, min_spectrum, max_spectrum, _initial_beta in BANDS:
                 name = f"P-{band}({cluster_points})"
@@ -570,7 +578,8 @@ def prepare_methods(
                     "triangles": triangles,
                     "extract": (
                         lambda attacked, _attacked_triangles, lab=labels,
-                        lo=min_spectrum, hi=max_spectrum: (
+                        lo=min_spectrum, hi=max_spectrum,
+                        cache=spectral_cache_dir: (
                             DW1X1.extract_watermark_x1(
                                 attacked,
                                 vertices,
@@ -599,6 +608,7 @@ def prepare_methods(
                                 one_to_one_workers=(
                                     PROPOSED_ONE_TO_ONE_WORKERS
                                 ),
+                                spectral_cache_dir=cache,
                             )
                         )
                     ),
@@ -790,22 +800,95 @@ def main():
         f"Mesh: {len(vertices)} vertices, {len(triangles)} faces; "
         f"watermark={len(bits)} bits; target PSNR={TARGET_PSNR} dB"
     )
-    method_variants = prepare_method_variants(
-        vertices, triangles, bits, target_mse
-    )
+    if NUM_EMBEDDING_TRIALS < 1:
+        raise ValueError("NUM_EMBEDDING_TRIALS must be at least 1.")
 
-    for experiment_type, parameters in EXPERIMENTS:
+    cache_parent = Path(__file__).resolve().parent / "tmp"
+    cache_parent.mkdir(parents=True, exist_ok=True)
+    deterministic_cache = {}
+    method_summaries = {}
+    robustness_samples = {
+        index: {} for index, (kind, _) in enumerate(EXPERIMENTS)
+        if kind != "visual_quality"
+    }
+    visual_samples = {
+        index: {} for index, (kind, _) in enumerate(EXPERIMENTS)
+        if kind == "visual_quality"
+    }
+
+    for trial in range(NUM_EMBEDDING_TRIALS):
+        embedding_seed = EMBEDDING_SEED_BASE + trial
+        print(
+            f"\n========== Embedding trial {trial + 1} / "
+            f"{NUM_EMBEDDING_TRIALS} (seed={embedding_seed}) =========="
+        )
+        np.random.seed(embedding_seed)
+        with tempfile.TemporaryDirectory(
+            prefix=f"dw2_gft_seed_{embedding_seed}_", dir=cache_parent
+        ) as spectral_cache_root:
+            print(f"[GFT cache] temporary directory: {spectral_cache_root}")
+            methods, newly_prepared = prepare_methods(
+                vertices,
+                triangles,
+                bits,
+                target_mse,
+                embedding_seed,
+                deterministic_cache,
+                spectral_cache_root=spectral_cache_root,
+            )
+            active_variants = {
+                name: [methods[name]] for name in newly_prepared
+            }
+            for name in newly_prepared:
+                summary = {"psnr": methods[name]["psnr"]}
+                if name == "Hu":
+                    summary["circular_count"] = methods[name]["circular_count"]
+                method_summaries.setdefault(name, []).append(summary)
+
+            for experiment_index, (experiment_type, parameters) in enumerate(
+                EXPERIMENTS
+            ):
+                if experiment_type == "visual_quality":
+                    scores = run_visual_quality_experiment(
+                        active_variants, vertices
+                    )
+                    for name, values in scores.items():
+                        visual_samples[experiment_index].setdefault(
+                            name, []
+                        ).append(values)
+                else:
+                    results = run_robustness_experiment(
+                        active_variants, bits, experiment_type, parameters
+                    )
+                    for name, values in results.items():
+                        per_parameter = robustness_samples[
+                            experiment_index
+                        ].setdefault(
+                            name, [[] for _ in parameters]
+                        )
+                        for parameter_index, value in enumerate(values):
+                            per_parameter[parameter_index].append(value)
+            print(f"[GFT cache] deleting temporary cache for seed={embedding_seed}")
+
+    for experiment_index, (experiment_type, parameters) in enumerate(EXPERIMENTS):
         if experiment_type == "visual_quality":
-            print_visual_quality_table(
-                run_visual_quality_experiment(method_variants, vertices),
-                method_variants,
-            )
+            averaged = {
+                name: {
+                    metric: float(np.mean([sample[metric] for sample in samples]))
+                    for metric in samples[0]
+                }
+                for name, samples in visual_samples[experiment_index].items()
+            }
+            print_visual_quality_table(averaged, method_summaries)
         else:
-            results = run_robustness_experiment(
-                method_variants, bits, experiment_type, parameters
-            )
+            averaged = {
+                name: [float(np.mean(samples)) for samples in per_parameter]
+                for name, per_parameter in robustness_samples[
+                    experiment_index
+                ].items()
+            }
             print_robustness_table(
-                experiment_type, parameters, results, method_variants
+                experiment_type, parameters, averaged, method_summaries
             )
 
 

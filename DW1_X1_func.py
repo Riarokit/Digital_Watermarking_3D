@@ -628,6 +628,7 @@ def prepare_watermark_x1_band_displacements(
     flatness_weighting=0,
     k_neighbors=20,
     small_cluster_policy="half_watermark",
+    spectral_cache_dir=None,
 ):
     """複数のGFT周波数帯について、beta=1の座標変位を一括計算する。
 
@@ -672,13 +673,16 @@ def prepare_watermark_x1_band_displacements(
     small_cluster_size_limit = _small_cluster_size_limit(
         len(embed_bits), small_cluster_policy
     )
+    if spectral_cache_dir is not None:
+        spectral_cache_dir = os.fspath(spectral_cache_dir)
+        os.makedirs(spectral_cache_dir, exist_ok=True)
 
     for cluster_id in cluster_ids:
         cluster_indices = np.flatnonzero(labels == cluster_id)
         if len(cluster_indices) <= small_cluster_size_limit:
             continue
         points = xyz[cluster_indices]
-        _, normal = compute_pseudoplane_pca(points)
+        centroid, normal = compute_pseudoplane_pca(points)
         graph = build_graph(points, graph_mode=graph_mode, k=k, radius=radius)
 
         coefficient_changes = np.zeros((len(points), len(band_specs)))
@@ -696,9 +700,22 @@ def prepare_watermark_x1_band_displacements(
                 signs * cluster_weight * phi
             )
 
-        height_changes = gft_synthesize_changes_auto(
-            graph, coefficient_changes
-        )
+        basis, eigvals = gft_basis_auto(graph)
+        height_changes = basis @ coefficient_changes
+        if spectral_cache_dir is not None:
+            cache_stem = os.path.join(
+                spectral_cache_dir, f"cluster_{int(cluster_id)}"
+            )
+            np.save(cache_stem + "_basis.npy", basis, allow_pickle=False)
+            h_orig = cluster_height_signal(points, centroid, normal)
+            np.savez(
+                cache_stem + "_meta.npz",
+                indices=cluster_indices,
+                centroid=centroid,
+                normal=normal,
+                gft_orig=basis.T @ h_orig,
+                eigvals=eigvals,
+            )
         for column, name in enumerate(names):
             displacements[name][cluster_indices] = (
                 height_changes[:, column, None] * normal[None, :]
@@ -1592,6 +1609,7 @@ def extract_watermark_x1(
     correspondence_mode: str = "auto",
     one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
     one_to_one_workers: int = 0,
+    spectral_cache_dir=None,
 ):
     """
     埋め込み前点群 xyz_orig から疑似平面を再構築し、
@@ -1635,25 +1653,38 @@ def extract_watermark_x1(
         if not np.all(matched_vertex_mask[cluster_indices]):
             continue
 
-        pts_orig = xyz_orig[cluster_indices]
         pts_emb = aligned_attacked_vertices[cluster_indices]
-        if len(pts_orig) != len(pts_emb):
+        if len(cluster_indices) != len(pts_emb):
             continue
 
-        # 疑似平面はorigから
-        centroid, normal = compute_pseudoplane_pca(pts_orig)
-
-        # 高さ信号（orig/emb）
-        h_orig = cluster_height_signal(pts_orig, centroid, normal)
-        h_emb = cluster_height_signal(pts_emb, centroid, normal)
-
-        # グラフはorigで
-        W = build_graph(pts_orig, graph_mode=graph_mode, k=k, radius=radius)
-        coefficients, eigvals = gft_analyze_signals_auto(
-            W, np.column_stack((h_orig, h_emb))
-        )
-        gft_orig = coefficients[:, 0]
-        gft_emb = coefficients[:, 1]
+        if spectral_cache_dir is None:
+            pts_orig = xyz_orig[cluster_indices]
+            centroid, normal = compute_pseudoplane_pca(pts_orig)
+            h_orig = cluster_height_signal(pts_orig, centroid, normal)
+            h_emb = cluster_height_signal(pts_emb, centroid, normal)
+            W = build_graph(pts_orig, graph_mode=graph_mode, k=k, radius=radius)
+            coefficients, _ = gft_analyze_signals_auto(
+                W, np.column_stack((h_orig, h_emb))
+            )
+            gft_orig = coefficients[:, 0]
+            gft_emb = coefficients[:, 1]
+        else:
+            cache_stem = os.path.join(
+                os.fspath(spectral_cache_dir), f"cluster_{int(cluster_id)}"
+            )
+            with np.load(cache_stem + "_meta.npz", allow_pickle=False) as meta:
+                if not np.array_equal(meta["indices"], cluster_indices):
+                    raise ValueError(
+                        f"Spectral cache labels differ for cluster {cluster_id}."
+                    )
+                centroid = meta["centroid"]
+                normal = meta["normal"]
+                gft_orig = meta["gft_orig"]
+            basis = np.load(
+                cache_stem + "_basis.npy", mmap_mode="r", allow_pickle=False
+            )
+            h_emb = cluster_height_signal(pts_emb, centroid, normal)
+            gft_emb = basis.T @ h_emb
 
         Q_ = len(gft_emb)
         q_start = int(Q_ * min_spectre)
