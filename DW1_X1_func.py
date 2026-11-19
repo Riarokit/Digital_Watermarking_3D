@@ -58,7 +58,7 @@ ONE_TO_ONE_CANDIDATES = (8, 16, 32, 64, 128)
 ONE_TO_ONE_AUTO_WORKER_THRESHOLD = 100_000
 ONE_TO_ONE_MODES = ("hk", "auction", "bidir")
 CORRESPONDENCE_MODES = ("auto", "index", "coordinate") + ONE_TO_ONE_MODES
-BIDIRECTIONAL_CANDIDATES = (8, 16, 32)
+BIDIRECTIONAL_CANDIDATES = (8, 16, 32, 64)
 # Enable only when profiling correspondence internals.  The summary is emitted
 # to stderr so DW2_exp's stdout suppression does not hide it.
 ONE_TO_ONE_PROFILE_LOGS = False
@@ -1144,7 +1144,7 @@ def _solve_bidirectional_cluster(tree, xyz_orig, cluster_id, rows, pool_count):
     """Sparse exact assignment on forward/reverse neighbour edges.
 
     The column pool is the union of each row's ``pool_count`` nearest received
-    points. Try 8, 16, and 32 forward AND reverse neighbours within that pool.
+    points. Try 8, 16, 32, and 64 forward AND reverse neighbours within that pool.
     Duplicate edges keep their cost once (sparse maximum, never a sum).
     """
     profile = {
@@ -1256,7 +1256,7 @@ def match_point_cloud_one_to_one(
     ``hk`` checks candidate prefixes with compiled Hopcroft-Karp, then uses
     the original sparse exact minimum-cost solver on the first feasible prefix.
     ``auction`` uses the same prefixes and HK check, then approximate auction.
-    ``bidir`` uses 8/16/32 forward and reverse edges from a column pool defined
+    ``bidir`` uses 8/16/32/64 forward and reverse edges from a column pool defined
     by max(candidate_counts). No original/received row identity is used.
 
     Uniqueness is local to each GFT cluster; different clusters can reuse a
