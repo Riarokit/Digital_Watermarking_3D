@@ -29,7 +29,7 @@ if __name__ == "__main__":
     n = 16
     # === 対応付け設定 ===
     correspondence_mode = "bidir"
-    coordinate_distance_factor = 3.0
+    coordinate_distance_factor = 8.0
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
     one_to_one_workers = 0
     # === 攻撃設定 ===

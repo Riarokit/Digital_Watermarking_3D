@@ -32,7 +32,7 @@ if __name__ == "__main__":
     n = 16
     # === 対応付け設定 ===
     correspondence_mode = "coordinate"
-    hu_coordinate_distance_factor = 3.0
+    hu_coordinate_distance_factor = 8.0
     # === 可視化設定 ===
     show = True
     # === 攻撃設定 ===
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     downsampling_mode = "voxel"
 
     # === Hu 固有の埋込設定 ===
-    fide_p = 52.7
+    fide_p = 53.5
     # Positive integer: fixed repetitions per bit. "auto": use the maximum
     # number of complete copies permitted by the scarcer signed-extrema set.
     T_rep = "auto"

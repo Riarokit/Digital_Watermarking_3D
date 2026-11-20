@@ -44,8 +44,8 @@ if __name__ == "__main__":
     radius = 0.03
     flatness_weighting = 0
     # === 対応付け設定 ===
-    index_distance_factor = 3.0
-    coordinate_distance_factor = 3.0
+    index_distance_factor = 8.0
+    coordinate_distance_factor = 8.0
     max_index_inconsistency_ratio = 0.01
     correspondence_mode = "bidir"
     one_to_one_candidates = DW1X1.ONE_TO_ONE_CANDIDATES
