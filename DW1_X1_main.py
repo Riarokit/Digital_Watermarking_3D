@@ -16,7 +16,7 @@ if __name__ == "__main__":
       graph_mode
           "knn", "radius", "hybrid"。k は knn の近傍数、radius は radius/hybrid の半径。
       flatness_weighting
-          0=なし、1=平面部重視、2=曲面部重視。
+          0=なし、1=平面部重視、2=曲面部重視, 3=平面部のみ, 4=曲面部のみ。
       min_spectre / max_spectre
           埋込対象にする GFT スペクトル帯域の下限・上限。
 

@@ -42,11 +42,11 @@ COMPARED_METHODS = [
 ]
 
 EXPERIMENTS = [
-    ("noise", [0.6]),
-    ("smoothing", [30]),
+    ("noise", [0.8]),
+    ("smoothing", [50]),
     ("cropping", [0.3]),
     # ("reordering", [0.1, 0.5, 1.0]),
-    ("downsampling", [0.8, 1.0]),
+    ("downsampling", [1.2]),
     # ("visual_quality", [None]),
 ]
 
@@ -63,8 +63,8 @@ KNN_K = 24
 GRAPH_RADIUS = 0.03
 # auto / index / coordinate / hk (HK+exact) / auction (HK+auction) / bidir
 PROPOSED_CORRESPONDENCE_MODE = "bidir"
-PROPOSED_INDEX_DISTANCE_FACTOR = 3.0
-PROPOSED_COORDINATE_DISTANCE_FACTOR = 3.0
+PROPOSED_INDEX_DISTANCE_FACTOR = 8.0
+PROPOSED_COORDINATE_DISTANCE_FACTOR = 8.0
 PROPOSED_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
 PROPOSED_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
 PROPOSED_ONE_TO_ONE_WORKERS = 0
@@ -86,12 +86,12 @@ HU_INITIAL_FIDEP = 53.0
 HU_T = "auto"   # "auto" or a positive integer
 HU_ARNOLD_ITERATIONS = 20
 HU_CORRESPONDENCE_MODE = "coordinate"  # auto, index, or coordinate
-HU_COORDINATE_DISTANCE_FACTOR = 3.0
+HU_COORDINATE_DISTANCE_FACTOR = 8.0
 
 # El Zein手法
 ELZEIN_CORRESPONDENCE_MODE = "bidir"  # auto / index / coordinate / hk / auction / bidir
-ELZEIN_INDEX_DISTANCE_FACTOR = 3.0
-ELZEIN_COORDINATE_DISTANCE_FACTOR = 3.0
+ELZEIN_INDEX_DISTANCE_FACTOR = 8.0
+ELZEIN_COORDINATE_DISTANCE_FACTOR = 8.0
 ELZEIN_MAX_INDEX_INCONSISTENCY_RATIO = 0.01
 ELZEIN_ONE_TO_ONE_CANDIDATES = DW1X1.ONE_TO_ONE_CANDIDATES
 ELZEIN_ONE_TO_ONE_WORKERS = 0
