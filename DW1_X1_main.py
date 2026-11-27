@@ -36,8 +36,8 @@ if __name__ == "__main__":
           "reordering"（並べ替え率 0–1）。attack_seed は乱数シード。
     """
     # === 埋込設定 ===
-    image_path = "bmp/original/watermark8.bmp"
-    n = 8
+    image_path = "bmp/original/watermark16.bmp"
+    n = 16
     cluster_point = 2000
     graph_mode = 'knn'
     k = 24
@@ -53,8 +53,8 @@ if __name__ == "__main__":
     # === 可視化設定 ===
     show = True
     # === 攻撃設定 ===
-    attack_type = "none"
-    attack_parameter = 1.0
+    attack_type = "smoothing"
+    attack_parameter = 50
     attack_seed = 42
     noise_mode = "gaussian"
     smoothing_lambda = 0.1
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     # === メッシュ別埋込プリセット ===
     # beta = 1.62e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Bunny低周波用
-    beta = 3.596e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
+    # beta = 3.596e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/bun_zipper.ply"
     # Bunny高周波用
     # beta = 3.59e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/bun_zipper.ply"
     # Dragon全周波用
@@ -78,7 +78,7 @@ if __name__ == "__main__":
     # Armadillo全周波用
     # beta = 1.68e-3; min_spectre = 0.0; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
     # Armadillo低周波用
-    # beta = 3.2e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/Armadillo.ply"
+    beta = 3.2e-3; min_spectre = 0.0; max_spectre = 0.2; input_file = "C:/Armadillo.ply"
     # Armadillo高周波用
     # beta = 4.16e-3; min_spectre = 0.8; max_spectre = 1.0; input_file = "C:/Armadillo.ply"
 
@@ -114,8 +114,6 @@ if __name__ == "__main__":
     # labels = DW1X1.ransac_cluster_points(xyz)
     # labels = DW1X1.split_large_clusters(xyz, labels, limit_points=3000)
     if show:
-        # Confirm the embedding clusters and their PCA pseudo-planes before
-        # watermarking. ``None`` deliberately displays every cluster.
         cluster_colors = DW1X1.visualize_clusters(xyz, labels)
         DW1X1.visualize_clusters_with_pseudoplanes(
             xyz,
@@ -194,6 +192,24 @@ if __name__ == "__main__":
     print(f"埋込ビット：{len(watermark_bits)}")
     print(f"抽出ビット：{len(extracted_bits)}")
     DW2F.evaluate_robustness(watermark_bits, extracted_bits)
+    if show:
+        DW1X1.visualize_cluster_recovery(
+            xyz_after,
+            xyz,
+            labels,
+            watermark_bits,
+            graph_mode=graph_mode,
+            k=k,
+            radius=radius,
+            min_spectre=min_spectre,
+            max_spectre=max_spectre,
+            index_distance_factor=index_distance_factor,
+            coordinate_distance_factor=coordinate_distance_factor,
+            max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+            correspondence_mode=correspondence_mode,
+            one_to_one_candidates=one_to_one_candidates,
+            one_to_one_workers=one_to_one_workers,
+        )
     unknown_count = int(np.count_nonzero(np.asarray(extracted_bits) < 0))
     if unknown_count:
         print(f"[Proposed] undecodable watermark bits: {unknown_count}")

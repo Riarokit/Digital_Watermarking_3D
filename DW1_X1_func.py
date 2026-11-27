@@ -159,6 +159,161 @@ def visualize_clusters(xyz, labels):
     color_list = [list(cluster_colors[i]) for i in range(n_clusters)]
     return color_list
 
+
+def visualize_cluster_recovery(
+    xyz_emb,
+    xyz_orig,
+    labels,
+    watermark_bits,
+    graph_mode="knn",
+    k=12,
+    radius=0.05,
+    min_spectre=0.0,
+    max_spectre=1.0,
+    index_distance_factor=20.0,
+    coordinate_distance_factor=2.0,
+    max_index_inconsistency_ratio=0.01,
+    correspondence_mode="auto",
+    one_to_one_candidates=ONE_TO_ONE_CANDIDATES,
+    one_to_one_workers=0,
+    color_max_ber=0.5,
+    show=True,
+):
+    """Display per-cluster BER as blue (poor) to red (good).
+
+    Each cluster independently votes its repeated observations for each
+    watermark bit, then compares those cluster-level bits with the payload.
+    Clusters with no usable coefficients or a tie for a bit are shown gray.
+    Colors use the absolute range ``0..color_max_ber`` rather than rescaling
+    to the worst cluster in the current model.
+    """
+    xyz_emb = np.asarray(xyz_emb, dtype=np.float64)
+    xyz_orig = np.asarray(xyz_orig, dtype=np.float64)
+    labels = np.asarray(labels)
+    watermark_bits = np.asarray(watermark_bits, dtype=np.int8).reshape(-1)
+    if labels.shape != (len(xyz_orig),):
+        raise ValueError("labels must contain one label per point.")
+    if watermark_bits.size == 0:
+        raise ValueError("watermark_bits must be nonempty.")
+    if not np.isfinite(color_max_ber) or color_max_ber <= 0:
+        raise ValueError("color_max_ber must be a positive finite value.")
+
+    # Use exactly the same correspondence and differential-GFT signal as the
+    # extractor.  Looking at the original geometry alone produces random
+    # signs (and therefore BER ~= 0.5), even when the global extraction is
+    # perfect.
+    aligned_emb, matched_mask = align_attacked_vertices_to_original(
+        xyz_emb,
+        xyz_orig,
+        index_distance_factor=index_distance_factor,
+        coordinate_distance_factor=coordinate_distance_factor,
+        max_index_inconsistency_ratio=max_index_inconsistency_ratio,
+        correspondence_mode=correspondence_mode,
+        labels=labels,
+        one_to_one_candidates=one_to_one_candidates,
+        one_to_one_workers=one_to_one_workers,
+        verbose=False,
+    )
+
+    small_limit = _small_cluster_size_limit(len(watermark_bits), "half_watermark")
+    cluster_ids = np.unique(labels)
+    rates = {}
+    for cluster_id in cluster_ids:
+        indices = np.flatnonzero(labels == cluster_id)
+        if len(indices) <= small_limit:
+            rates[cluster_id] = np.nan
+            continue
+        if not np.all(matched_mask[indices]):
+            rates[cluster_id] = np.nan
+            continue
+        points_orig = xyz_orig[indices]
+        points_emb = aligned_emb[indices]
+        centroid, normal = compute_pseudoplane_pca(points_orig)
+        h_orig = cluster_height_signal(points_orig, centroid, normal)
+        h_emb = cluster_height_signal(points_emb, centroid, normal)
+        graph = build_graph(points_orig, graph_mode=graph_mode, k=k, radius=radius)
+        coefficients, _ = gft_analyze_signals_auto(
+            graph, np.column_stack((h_orig, h_emb))
+        )
+        difference = coefficients[:, 1] - coefficients[:, 0]
+        start = int(len(points_orig) * min_spectre)
+        end = int(len(points_orig) * max_spectre)
+        count = max(end - start, 0)
+        repeats = count // len(watermark_bits)
+        if repeats < 1:
+            rates[cluster_id] = np.nan
+            continue
+        decoded = difference[start:start + count] > 0.0
+        votes = [[] for _ in range(len(watermark_bits))]
+        n_repeat = count // len(watermark_bits)
+        # Match extract_watermark_x1 exactly: repeated copies are laid out
+        # bit-major, so bit i votes from i*n_repeat through (i+1)*n_repeat.
+        for bit_idx in range(len(watermark_bits)):
+            for rep in range(n_repeat):
+                coefficient_index = bit_idx * n_repeat + rep
+                if coefficient_index < count:
+                    votes[bit_idx].append(int(decoded[coefficient_index]))
+        # The embedding helper appends any tail coefficients from the start
+        # of the payload, and the extractor assigns them cyclically as well.
+        for coefficient_index in range(n_repeat * len(watermark_bits), count):
+            bit_idx = coefficient_index % len(watermark_bits)
+            votes[bit_idx].append(int(decoded[coefficient_index]))
+        known = np.asarray(
+            [bool(vote) and 2 * sum(vote) != len(vote) for vote in votes],
+            dtype=bool,
+        )
+        recovered = np.asarray(
+            [1 if 2 * sum(vote) > len(vote) else 0 for vote in votes],
+            dtype=np.int8,
+        )
+        errors = np.count_nonzero(known & (recovered != watermark_bits))
+        unknown = np.count_nonzero(~known)
+        rates[cluster_id] = float(
+            (errors + 0.5 * unknown) / len(watermark_bits)
+        )
+
+    finite_rates = np.asarray(
+        [value for value in rates.values() if np.isfinite(value)], dtype=float
+    )
+    if not len(finite_rates):
+        raise ValueError("No cluster contains enough coefficients for recovery scoring.")
+    # Use an absolute BER scale, not the worst cluster in this particular
+    # model.  BER=0 is red (perfect), BER=color_max_ber is blue (poor).
+    maximum = float(color_max_ber)
+    colors = np.tile(np.array([0.5, 0.5, 0.5]), (len(cluster_ids), 1))
+    for row, cluster_id in enumerate(cluster_ids):
+        rate = rates[cluster_id]
+        if not np.isfinite(rate):
+            continue
+        quality = float(np.clip(1.0 - rate / maximum, 0.0, 1.0))
+        # Blue -> cyan -> yellow -> red.  This avoids neutral gray at the
+        # midpoint; gray remains reserved for unavailable/invalid clusters.
+        if quality < 1.0 / 3.0:
+            t = quality * 3.0
+            colors[row] = [0.0, t, 1.0]
+        elif quality < 2.0 / 3.0:
+            t = quality * 3.0 - 1.0
+            colors[row] = [t, 1.0, 1.0 - t]
+        else:
+            t = quality * 3.0 - 2.0
+            colors[row] = [1.0, 1.0 - t, 0.0]
+
+    color_by_cluster = {
+        cluster_id: colors[row] for row, cluster_id in enumerate(cluster_ids)
+    }
+    point_colors = np.asarray([color_by_cluster[label] for label in labels])
+    if show:
+        cloud = o3d.geometry.PointCloud()
+        # Colors are defined per original cluster, so display the aligned
+        # vertices (one point per original label) rather than a cropped attack
+        # array whose length/order may differ.
+        cloud.points = o3d.utility.Vector3dVector(aligned_emb)
+        cloud.colors = o3d.utility.Vector3dVector(point_colors)
+        o3d.visualization.draw_geometries(
+            [cloud], window_name="Cluster watermark recovery (red=good, blue=poor)"
+        )
+    return rates
+
 def estimate_cluster_flatness(xyz, labels, k_neighbors=20):
     """
     各クラスタごとに「平面らしさ（平坦度）」指標を算出（平均曲率を使用）
